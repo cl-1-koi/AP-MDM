@@ -14,11 +14,16 @@ Materials:
 
 ## Installation
 
-- Install [PyTorch](https://pytorch.org) according to instructions in the offical website.
 - Install other required packages via
 
 ```bash
 pip install -r requirements.txt
+```
+
+- Install flash-attention
+
+```bash
+pip install flash-attn --no-build-isolation
 ```
 
 

@@ -1,8 +1,3 @@
-# ========================================
-# Flash-Attention Installation:
-#    pip install flash-attn --no-build-isolation
-# ======================================== 
-
 torch>=2.0.0
 torchvision>=0.15.0
 
