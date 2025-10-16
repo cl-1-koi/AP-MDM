@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🎯 APMDM Sudoku Training Data Visualization</title>
+  <style>
+    body { 
+      font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; 
+      margin:0; 
+      padding:24px; 
+      background: linear-gradient(135deg,#667eea,#764ba2); 
+      color:#2d3748; 
+      font-size: 14px;
+    }
+    .container { max-width: 1800px; margin: 0 auto; background: #fff; border-radius: 16px; padding: 24px; box-shadow: 0 20px 40px rgba(0,0,0,.1); }
+    .header { text-align:center; margin-bottom: 12px; }
+    .header h1 { margin: 0; font-weight: 600; color:#2d3748; }
+    .sub { color:#718096; margin-top: 8px; }
+
+    .controls { background:#fff; border-radius: 12px; padding:16px; box-shadow: 0 8px 24px rgba(0,0,0,.08); margin:16px 0; }
+    .row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    .btn { padding:8px 14px; border:0; border-radius:8px; background:#4299e1; color:#fff; font-weight:600; cursor:pointer; font-size: 13px; }
+    .btn.secondary { background:#e2e8f0; color:#2d3748; }
+    .btn:disabled { opacity:.55; cursor:not-allowed; }
+    .slider { width:120px; }
+    .input { padding:6px 8px; border-radius:6px; border:1px solid #e2e8f0; font-size: 13px; }
+
+    .layout { display:grid; grid-template-columns: 480px 1fr; gap: 20px; }
+    @media(max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+
+    .card { background:#fff; border-radius: 12px; padding: 16px; box-shadow: 0 8px 24px rgba(0,0,0,.08); }
+    .title { font-size: 16px; font-weight:700; margin:0 0 10px; color:#2d3748; display:flex; align-items:center; gap:8px; }
+
+    .grid { 
+      display:grid; 
+      grid-template-columns: repeat(9, 1fr); 
+      gap:2px; 
+      background:#1a202c; 
+      border-radius:8px; 
+      padding:1px; 
+      border: 2px solid #1a202c; 
+      box-sizing: border-box;
+      position: relative;
+    }
+    .grid::after {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: -1px;
+      right: -1px;
+      bottom: -1px;
+      border: 2px solid #1a202c;
+      border-radius: 8px;
+      pointer-events: none;
+      z-index: 2;
+      background: transparent;
+    }
+    .cell { 
+      aspect-ratio:1; 
+      background:#fff; 
+      display:flex; 
+      align-items:center; 
+      justify-content:center; 
+      font-size:35px; 
+      font-weight:700; 
+      border:1px solid #cbd5e0; 
+      position:relative; 
+      transition: all .2s ease; 
+      z-index: 1;
+    }
+    .cell.thick-r { border-right:2px solid #1a202c !important; }
+    .cell.thick-b { border-bottom:2px solid #1a202c !important; }
+    .cell.empty { color:#a0aec0; background:#f7fafc; }
+    .cell.changed { 
+      box-shadow: inset 0 0 0 3px rgba(239, 68, 68, 0.8), 
+                  0 0 0 2px rgba(239, 68, 68, 0.6); 
+      background:#fff; 
+      z-index: 1; 
+    }
+    .cell.mask { background:#1a1a1a; color:#ffffff; font-weight: bold; }
+    
+    /* 🌿 Branch start marker style */
+    .cell.branch-start {
+      position: relative;
+    }
+    .cell.branch-start::after {
+      content: "🌿";
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      font-size: 14px;
+      background: rgba(255,255,255,0.9);
+      border-radius: 50%;
+      width: 22px;
+      height: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    
+    /* 💀 Failed branch start style */
+    .cell.branch-failed::after {
+      content: "💀";
+      background: rgba(255,0,0,0.1);
+      border: 1px solid rgba(255,0,0,0.3);
+    }
+
+    .gdlm-panel { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .sequence-container { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px; }
+    .sequence-title { font-weight:600; font-size:13px; margin-bottom:6px; color:#2d3748; }
+    .sequence { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:11px; line-height:1.4; max-height:100px; overflow:auto; }
+    
+    /* 🔄 Large sequence display panel */
+    .large-sequences-panel { margin: 20px 0; }
+    .large-sequence-container { 
+      background:#f8fafc; 
+      border:1px solid #e2e8f0; 
+      border-radius:8px; 
+      padding:16px; 
+      margin: 16px 0; 
+    }
+    .large-sequence { 
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; 
+      font-size: 12px; 
+      line-height: 1.5;
+      max-height: 120px; 
+      overflow-y: auto;
+      word-break: break-all;
+      min-height: 80px;
+      padding: 10px;
+      background: #ffffff;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+    }
+    
+    /* 🤖 Model output panel */
+    .model-output-panel { margin: 20px 0; }
+    
+    /* 🎯 Operation information area */
+    .operation-info {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #e2e8f0;
+    }
+    .token { display:inline-block; padding:2px 4px; margin:1px; border-radius:4px; border:1px solid rgba(0,0,0,.06); font-size:10px; }
+    .token.changed { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.8); border: 2px solid #ef4444; }
+    .token.mask { font-weight: bold; background: #1a1a1a; color: #ffffff; }
+    .token.empty { background:#f7fafc; color:#a0aec0; }
+    .token.eos { background:#fef9c3; color:#744210; }
+    
+    /* Special marker color styles */
+    .token.branch { color: #22c55e; font-weight: 600; }
+    .token.skull { color: #ef4444; font-weight: 600; }
+    .token.normal { color: #2d3748; }
+    
+    /* 🔥 Color marker background styles now set dynamically via JavaScript to match grid colors */
+    
+    .seq-info { 
+      font-size:10px; 
+      color:#4a5568; 
+      font-weight:600; 
+      margin-top:4px; 
+      padding:2px 6px; 
+      background:#f0f4f8; 
+      border-radius:3px; 
+      display:inline-block;
+    }
+
+    .labels-panel { background:#f0fff4; border:1px solid #9ae6b4; border-radius:8px; padding:12px; margin-bottom:12px; }
+    .label-row { display:grid; grid-template-columns: 80px 1fr auto; gap: 8px; align-items:center; margin:4px 0; }
+    .label-name { font-weight:600; font-size:12px; color:#2f855a; }
+    .label-values { 
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; 
+      font-size:11px; 
+      max-height: 60px; 
+      overflow-y: auto; 
+      padding: 4px; 
+      background: #fff; 
+      border: 1px solid #e2e8f0; 
+      border-radius: 4px;
+    }
+    .label-bit { display:inline-block; padding:1px 4px; margin:1px; border-radius:3px; }
+    .label-bit.active { background:#9ae6b4; color:#1a365d; font-weight:bold; }
+    .label-bit.inactive { background:#f7fafc; color:#a0aec0; }
+    .label-toggle { font-size:10px; color:#2f855a; cursor:pointer; padding:2px 6px; background:#f0fff4; border:1px solid #9ae6b4; border-radius:4px; }
+    .label-toggle:hover { background:#dcfce7; }
+
+    .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-weight:700; font-size:11px; margin:2px; }
+    .op-assign_remask { background:#fed7d7; color:#9b2c2c; }
+    .op-assign_unmask { background:#f0fff4; color:#2f855a; }
+    .op-branch_remask { background:#ebf4ff; color:#2b6cb0; }
+    .op-branch_unmask { background:#e6fffa; color:#2c7a7b; }
+    .op-final_eos { background:#fef9c3; color:#744210; }
+
+    .progress { height:8px; background:#edf2f7; border-radius:999px; overflow:hidden; margin-top:8px; cursor:pointer; position:relative; }
+    .progress > div { height:100%; background: linear-gradient(90deg,#4299e1,#667eea); width:0%; transition: width .25s ease; }
+    .progress:hover { height:10px; }
+    
+    .timestep {
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #4a5568;
+      text-align: center;
+      margin-top: 6px;
+    }
+
+    .metadata { background:#f8fafc; padding:10px; border-radius:6px; font-size:12px; line-height:1.4; }
+    .meta-item { margin:2px 0; }
+    .meta-key { font-weight:600; color:#2d3748; }
+    .meta-value { color:#4a5568; }
+
+    .muted { color:#718096; font-size: 12px; }
+
+    /* Difference highlighting */
+    .diff-container { margin-top: 12px; }
+    .diff-title { font-weight:600; font-size:13px; margin-bottom:6px; color:#2d3748; }
+    .diff-grid { 
+      display:grid; 
+      grid-template-columns: repeat(9, 1fr); 
+      gap:2px; 
+      background:#a0aec0; 
+      border-radius:6px; 
+      padding:1px; 
+      border: 2px solid #a0aec0; 
+      box-sizing: border-box;
+      position: relative;
+    }
+    .diff-grid::after {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: -1px;
+      right: -1px;
+      bottom: -1px;
+      border: 2px solid #a0aec0;
+      border-radius: 6px;
+      pointer-events: none;
+      z-index: 2;
+      background: transparent;
+    }
+    .diff-cell { 
+      aspect-ratio:1; 
+      display:flex; 
+      align-items:center; 
+      justify-content:center; 
+      font-size:26px; 
+      font-weight:600; 
+      border:1px solid #e2e8f0;
+      background:#fff;
+      position:relative;
+      z-index: 1;
+    }
+    .diff-cell.thick-r { border-right:2px solid #1a202c !important; }
+    .diff-cell.thick-b { border-bottom:2px solid #1a202c !important; }
+    .diff-cell.changed { 
+      box-shadow: inset 0 0 0 3px rgba(239, 68, 68, 0.8), 
+                  0 0 0 2px rgba(239, 68, 68, 0.6); 
+      background:#fff; 
+      color:#1a202c; 
+      z-index: 1;
+    }
+    .diff-cell.mask { background:#1a1a1a; color:#ffffff; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🎯 APMDM Sudoku Training Data Visualization</h1>
+      <div class="sub">Show APMDM training sample sequence transformation process, including x_k, y_star and all operation labels (r*, e*, c*)</div>
+    </div>
+
+    <div class="controls">
+      <div class="row" style="margin-bottom:6px;">
+        <button class="btn" id="play">▶️ Play</button>
+        <button class="btn secondary" id="pause" disabled>⏸️ Pause</button>
+        <button class="btn secondary" id="prev" disabled>⏮️ Prev</button>
+        <button class="btn secondary" id="next" disabled>⏭️ Next</button>
+        <button class="btn secondary" id="reset">🔄 Reset</button>
+        <button class="btn" id="load">📂 Load APMDM Data</button>
+        <label class="muted">Speed</label>
+        <input class="slider" id="speed" type="range" min="0.5" max="3" step="0.5" value="1" />
+        <span id="speedv" class="muted">1x</span>
+      </div>
+      <div class="row">
+        <label class="muted">Data Source</label>
+        <input class="input" id="datasource" value="sudoku-test-10k.npy" style="min-width:160px" />
+        <label class="muted">Index</label>
+        <input class="input" id="dataindex" type="number" value="0" style="width:60px" />
+        <button class="btn" id="generate">🎲 Generate Data</button>
+        <label class="muted">APMDM File</label>
+        <input class="input" id="datafile" value="sudoku_apmdm_with_visual.jsonl" style="min-width:160px" />
+      </div>
+      <div class="muted" id="meta">Click "Load APMDM Data" to start</div>
+      <div class="timestep" id="timestep">Sample: 0 / 0</div>
+      <div class="progress"><div id="bar"></div></div>
+    </div>
+
+    <!-- Main layout: Left grid+operation details | Right sequence transformation -->
+    <div class="layout">
+      <div class="card">
+        <div class="title">🧩 Sudoku Grid Changes</div>
+        <div class="grid" id="grid"></div>
+        
+        <div class="diff-container">
+          <div class="diff-title">📊 Change Comparison (x_k → x_k_plus_1)</div>
+          <div class="diff-grid" id="diff-grid"></div>
+        </div>
+        
+        <!-- 🎯 APMDM operation details moved to bottom left -->
+        <div class="operation-info">
+          <div class="title" style="margin-top: 8px;">🎯 APMDM Operation Details</div>
+          <div style="margin-top:10px;">
+            <span id="badge" class="badge">Not loaded</span>
+            <div id="desc" class="muted">Operation description</div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Right side completely for sequence transformation display -->
+      <div class="card" style="height: fit-content;">
+        <div class="title">🔄 Sequence Transformation (x_k → x_k_plus_1)</div>
+        
+        <div class="large-sequences-panel" style="margin: 16px 0;">
+          <div class="large-sequence-container">
+            <div class="sequence-title">📥 Input Sequence (x_k)</div>
+            <div class="large-sequence" id="x_k">Not loaded</div>
+            <div class="sequence-title" style="margin-top:8px; font-size:11px;">🔤 Decoded Meaning</div>
+            <div class="large-sequence" id="x_k_decoded">Not loaded</div>
+          </div>
+          
+          <div class="large-sequence-container" style="margin-top: 20px;">
+            <div class="sequence-title">📤 Output Sequence (x_k_plus_1)</div>
+            <div class="large-sequence" id="x_k_plus_1">Not loaded</div>
+            <div class="sequence-title" style="margin-top:8px; font-size:11px;">🔤 Decoded Meaning</div>
+            <div class="large-sequence" id="x_k_plus_1_decoded">Not loaded</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom section: Model output control -->
+    <div class="card" style="margin-top: 16px;">
+      <div class="title">🤖 Model Expected Output (controls x_k → x_k_plus_1)</div>
+      
+      <div class="model-output-panel">
+        <div class="sequence-container" style="margin-bottom:20px;">
+          <div class="sequence-title">🎯 Target Sequence (y_star)</div>
+          <div class="sequence" id="y_star">Not loaded</div>
+          <div class="sequence-title" style="margin-top:8px; font-size:11px;">🔤 Decoded Meaning</div>
+          <div class="sequence" id="y_star_decoded">Not loaded</div>
+        </div>
+
+        <div class="labels-panel">
+          <div class="label-row">
+            <div class="label-name">Remask</div>
+            <div class="label-values" id="r_star">-</div>
+            <div class="label-toggle" id="r_toggle" data-target="r_star">All</div>
+          </div>
+          <div class="label-row">
+            <div class="label-name">Insert</div>
+            <div class="label-values" id="e_star">-</div>
+            <div class="label-toggle" id="e_toggle" data-target="e_star">All</div>
+          </div>
+          <div class="label-row">
+            <div class="label-name">Delete</div>
+            <div class="label-values" id="c_star">-</div>
+            <div class="label-toggle" id="c_toggle" data-target="c_star">All</div>
+          </div>
+        </div>
+
+        <div class="metadata">
+          <div class="meta-item"><span class="meta-key">Sample ID:</span> <span class="meta-value" id="sample_id">-</span></div>
+          <div class="meta-item"><span class="meta-key">Operation Type:</span> <span class="meta-value" id="operation">-</span></div>
+          <div class="meta-item"><span class="meta-key">Position:</span> <span class="meta-value" id="position">-</span></div>
+          <div class="meta-item"><span class="meta-key">Target Value:</span> <span class="meta-value" id="target_value">-</span></div>
+          <div class="meta-item"><span class="meta-key">Sequence Length:</span> <span class="meta-value" id="seq_length">-</span></div>
+          <div class="meta-item"><span class="meta-key">Operation Stats:</span> <span class="meta-value" id="operation_stats">-</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    class APMDMAnimator {
+      constructor() {
+        this.samples = [];
+        this.currentIndex = 0;
+        this.playing = false;
+        this.speed = 1.0;
+        this.timer = null;
+        this.showFullLabels = { r_star: true, e_star: true, c_star: true };
+        
+        // Token vocabulary mapping - V2 version (4-token encoding)
+        this.tokenVocab = {
+          // Value Tokens (0-10)
+          0: '[EMPTY]', 10: '[MASK]',
+          1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8', 9: '9',
+          // Color Tokens (11-23)  
+          11: '[WHITE]',
+          12: '[COLOR_1]', 13: '[COLOR_2]', 14: '[COLOR_3]', 15: '[COLOR_4]',
+          16: '[COLOR_5]', 17: '[COLOR_6]', 18: '[COLOR_7]', 19: '[COLOR_8]',
+          20: '[COLOR_9]', 21: '[COLOR_10]', 22: '[COLOR_11]', 23: '[COLOR_12]',
+          // Extended Color Tokens (12-26, support 15 branch colors)
+          24: '[COLOR_13]', 25: '[COLOR_14]', 26: '[COLOR_15]',
+          // Marker Tokens (27-29)  
+          27: '[NORMAL]', 28: '[SKULL]', 29: '[BRANCH]',
+          // Separator Token (30)
+          30: '|',
+          // EOS Token (31)
+          31: '[EOS]'
+        };
+
+        // 🔥 Unified color palette - ensure grid and token sequence use same colors
+        this.colorPalette = [
+          '#ffffff',  // 0: WHITE
+          '#fee2e2',  // 1: COLOR_1 - Light red
+          '#dbeafe',  // 2: COLOR_2 - Light blue
+          '#dcfce7',  // 3: COLOR_3 - Light green
+          '#fef3c7',  // 4: COLOR_4 - Light yellow
+          '#f3e8ff',  // 5: COLOR_5 - Light purple
+          '#fce7f3',  // 6: COLOR_6 - Light pink
+          '#f0f9ff',  // 7: COLOR_7 - Light sky blue
+          '#ecfdf5',  // 8: COLOR_8 - Light jade green
+          '#fefce8',  // 9: COLOR_9 - Light lemon
+          '#fdf2f8',  // 10: COLOR_10 - Light rose
+          '#f1f5f9',  // 11: COLOR_11 - Light gray blue
+          '#f8fafc'   // 12: COLOR_12 - Light gray
+        ];
+
+        this.gridEl = document.getElementById('grid');
+        this.diffGridEl = document.getElementById('diff-grid');
+        this.badgeEl = document.getElementById('badge');
+        this.descEl = document.getElementById('desc');
+        this.metaEl = document.getElementById('meta');
+        this.barEl = document.getElementById('bar');
+        this.timestepEl = document.getElementById('timestep');
+
+        // APMDM sequence elements
+        this.xKEl = document.getElementById('x_k');
+        this.xKPlus1El = document.getElementById('x_k_plus_1');
+        this.yStarEl = document.getElementById('y_star');
+        this.xKDecodedEl = document.getElementById('x_k_decoded');
+        this.xKPlus1DecodedEl = document.getElementById('x_k_plus_1_decoded');
+        this.yStarDecodedEl = document.getElementById('y_star_decoded');
+        this.rStarEl = document.getElementById('r_star');
+        this.eStarEl = document.getElementById('e_star');
+        this.cStarEl = document.getElementById('c_star');
+
+        // Metadata elements
+        this.sampleIdEl = document.getElementById('sample_id');
+        this.operationEl = document.getElementById('operation');
+        this.positionEl = document.getElementById('position');
+        this.targetValueEl = document.getElementById('target_value');
+        this.seqLengthEl = document.getElementById('seq_length');
+        this.operationStatsEl = document.getElementById('operation_stats');
+
+        // Control buttons
+        this.btnPlay = document.getElementById('play');
+        this.btnPause = document.getElementById('pause');
+        this.btnPrev = document.getElementById('prev');
+        this.btnNext = document.getElementById('next');
+        this.btnReset = document.getElementById('reset');
+        this.btnLoad = document.getElementById('load');
+        this.btnGenerate = document.getElementById('generate');
+        this.speedEl = document.getElementById('speed');
+        this.speedvEl = document.getElementById('speedv');
+        this.datafileEl = document.getElementById('datafile');
+        this.datasourceEl = document.getElementById('datasource');
+        this.dataindexEl = document.getElementById('dataindex');
+        this.progressEl = document.querySelector('.progress');
+
+        this._initGrids();
+        this._bind();
+        this._updateButtons();
+      }
+
+      _initGrids() {
+        // Initialize main grid
+        this.gridEl.innerHTML = '';
+        this.diffGridEl.innerHTML = '';
+        
+        for (let i = 0; i < 81; i++) {
+          // Main grid
+          const cell = document.createElement('div');
+          cell.className = 'cell empty';
+          this._addGridBorders(cell, i);
+          this.gridEl.appendChild(cell);
+
+          // Diff grid
+          const diffCell = document.createElement('div');
+          diffCell.className = 'diff-cell';
+          this._addGridBorders(diffCell, i);
+          this.diffGridEl.appendChild(diffCell);
+        }
+      }
+
+      _addGridBorders(cell, i) {
+        const r = Math.floor(i/9), c = i%9;
+        // 3×3 region dividers
+        if (c === 2 || c === 5) cell.classList.add('thick-r');
+        if (r === 2 || r === 5) cell.classList.add('thick-b');
+        // 9×9 grid outer borders
+        if (c === 8) cell.classList.add('thick-r');
+        if (r === 8) cell.classList.add('thick-b');
+      }
+
+      _bind() {
+        this.btnPlay.onclick = () => this.play();
+        this.btnPause.onclick = () => this.pause();
+        this.btnPrev.onclick = () => this.step(-1);
+        this.btnNext.onclick = () => this.step(1);
+        this.btnReset.onclick = () => this.reset();
+        this.btnLoad.onclick = () => this.loadAPMDMData();
+        this.btnGenerate.onclick = () => this.generateAPMDMData();
+        this.speedEl.oninput = () => {
+          this.speed = parseFloat(this.speedEl.value);
+          this.speedvEl.textContent = this.speed + 'x';
+          if (this.playing) { this.pause(); this.play(); }
+        };
+        
+        // Progress bar click to jump
+        this.progressEl.onclick = (e) => this.jumpToProgress(e);
+        
+        // Label toggle buttons
+        document.getElementById('r_toggle').onclick = () => this.toggleLabelView('r_star');
+        document.getElementById('e_toggle').onclick = () => this.toggleLabelView('e_star'); 
+        document.getElementById('c_toggle').onclick = () => this.toggleLabelView('c_star');
+      }
+
+      async generateAPMDMData() {
+        const datasource = this.datasourceEl.value.trim();
+        const index = parseInt(this.dataindexEl.value) || 0;
+        const outputFile = this.datafileEl.value.trim();
+        
+        this.metaEl.textContent = `🔄 Generating APMDM data (index=${index})...`;
+        try {
+          const response = await fetch('/api/generate_apmdm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              data: datasource, 
+              index: index, 
+              output_file: outputFile 
+            })
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || 'Generation failed');
+          
+          this.metaEl.textContent = `✅ APMDM data generated successfully: ${result.sample_count} samples (index=${index})`;
+          await this.loadAPMDMData();
+        } catch (error) {
+          this.metaEl.textContent = `❌ Generation failed: ${error.message}`;
+        }
+      }
+
+      async loadAPMDMData() {
+        const filename = this.datafileEl.value.trim();
+        this.metaEl.textContent = `📂 Loading ${filename}...`;
+        
+        try {
+          const response = await fetch(`/${filename}`);
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          
+          const text = await response.text();
+          this.samples = text.trim().split('\n')
+            .filter(line => line.trim())
+            .map(line => JSON.parse(line));
+          
+          this.metaEl.textContent = `✅ Loaded ${this.samples.length} APMDM training samples`;
+          this.timestepEl.textContent = `Sample: 1 / ${this.samples.length}`;
+          this.reset();
+        } catch (error) {
+          this.metaEl.textContent = `❌ Loading failed: ${error.message}`;
+          this.samples = [];
+        }
+        this._updateButtons();
+      }
+
+      reset() {
+        this.currentIndex = 0;
+        this.playing = false;
+        clearTimeout(this.timer);
+        this._renderSample();
+        this._updateButtons();
+      }
+
+      play() {
+        if (!this.samples.length) return;
+        this.playing = true;
+        this._tick();
+        this._updateButtons();
+      }
+
+      pause() {
+        this.playing = false;
+        clearTimeout(this.timer);
+        this._updateButtons();
+      }
+
+      step(delta) {
+        if (!this.samples.length) return;
+        this.currentIndex = Math.min(Math.max(this.currentIndex + delta, 0), this.samples.length - 1);
+        this._renderSample();
+        this._updateButtons();
+      }
+
+      _updateButtons() {
+        const hasData = this.samples.length > 0;
+        this.btnPlay.disabled = !hasData || this.playing;
+        this.btnPause.disabled = !hasData || !this.playing;
+        this.btnPrev.disabled = !hasData || this.currentIndex <= 0;
+        this.btnNext.disabled = !hasData || this.currentIndex >= this.samples.length - 1;
+        this.btnReset.disabled = !hasData;
+      }
+
+      _tick() {
+        if (!this.playing) return;
+        this._renderSample();
+        if (this.currentIndex < this.samples.length - 1) {
+          this.currentIndex++;
+          const interval = 800 / this.speed;
+          this.timer = setTimeout(() => this._tick(), interval);
+        } else {
+          this.pause();
+        }
+      }
+
+      _renderSample() {
+        if (!this.samples.length) return;
+        
+        const sample = this.samples[this.currentIndex];
+        const metadata = sample.solver_metadata;
+        
+        // 🔥 Fix: Parse sequences - support both new and old formats
+        const parseTokens = (data, fieldName = '') => {
+            if (Array.isArray(data)) {
+                // New format: integer array
+                if (fieldName === 'y_star') console.log(`✅ ${fieldName} parsed successfully (array format):`, data.slice(0, 10));
+                return data.map(String);  // Convert to string array for compatibility
+            } else if (typeof data === 'string') {
+                // Old format: string
+                if (fieldName === 'y_star') console.log(`✅ ${fieldName} parsed successfully (string format):`, data.split(' ').slice(0, 10));
+                return data.split(' ');
+            } else {
+                if (fieldName === 'y_star') console.warn(`❌ ${fieldName} parsing failed - unknown format:`, typeof data, data);
+                return [];
+            }
+        };
+        
+        const xKTokens = parseTokens(sample.x_k, 'x_k');
+        const xKPlus1Tokens = parseTokens(sample.x_k_plus_1, 'x_k_plus_1');
+        const yStarTokens = parseTokens(sample.y_star, 'y_star');
+        
+        // 🔥 Debug info: Check data loading
+        console.log('🔍 Sample data check:', {
+          'x_k type': typeof sample.x_k, 'x_k length': sample.x_k ? (Array.isArray(sample.x_k) ? sample.x_k.length : sample.x_k.split(' ').length) : 0,
+          'x_k_plus_1 type': typeof sample.x_k_plus_1, 'x_k_plus_1 length': sample.x_k_plus_1 ? (Array.isArray(sample.x_k_plus_1) ? sample.x_k_plus_1.length : sample.x_k_plus_1.split(' ').length) : 0,
+          'y_star type': typeof sample.y_star, 'y_star length': sample.y_star ? (Array.isArray(sample.y_star) ? sample.y_star.length : sample.y_star.split(' ').length) : 0,
+          'y_star exists': !!sample.y_star,
+          'y_star first 10 tokens': sample.y_star ? (Array.isArray(sample.y_star) ? sample.y_star.slice(0, 10) : sample.y_star.split(' ').slice(0, 10)) : 'No data'
+        });
+        
+        // Render grid state - using token decoding
+        this._renderGridFromTokens(xKTokens, xKPlus1Tokens);
+        this._renderSequences(xKTokens, xKPlus1Tokens, yStarTokens);
+        this._renderLabels(sample.r_star, sample.e_star, sample.c_star);
+        this._renderMetadata(sample);
+        
+        // Update UI state
+        const opClass = `op-${metadata.operation}`;
+        this.badgeEl.className = `badge ${opClass}`;
+        this.badgeEl.textContent = metadata.operation;
+        this.descEl.textContent = `Step ${metadata.step || ''} - ${metadata.gdlm_operation || metadata.operation}`;
+        
+        const progress = this.samples.length <= 1 ? 0 : (this.currentIndex / (this.samples.length - 1)) * 100;
+        this.barEl.style.width = progress.toFixed(1) + '%';
+        this.timestepEl.textContent = `Sample: ${this.currentIndex + 1} / ${this.samples.length}`;
+      }
+
+      // New method: Grid rendering based on token decoding
+      async _renderGridFromTokens(xKTokens, xKPlus1Tokens) {
+        try {
+          // Call API to decode token sequence
+          const tokenSequence = xKPlus1Tokens.join(' ');
+          const response = await fetch('/api/decode_visual', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({token_sequence: tokenSequence})
+          });
+          
+          if (!response.ok) {
+            throw new Error(`API call failed: ${response.status}`);
+          }
+          
+          const {visual_info} = await response.json();
+          this._renderGrid(xKTokens, xKPlus1Tokens, visual_info);
+          
+        } catch (error) {
+          console.error('Token decoding failed:', error);
+          // Fallback: use empty visual_info
+          this._renderGrid(xKTokens, xKPlus1Tokens, null);
+        }
+      }
+      
+      // Original grid rendering method
+      _renderGrid(xKTokens, xKPlus1Tokens, visualInfo) {
+        const cells = this.gridEl.children;
+        const diffCells = this.diffGridEl.children;
+        // 🔥 Fix: Use unified color palette to ensure consistency with token sequence CSS colors
+        const palette = this.colorPalette;
+        
+        // 🔧 Fix expansion offset: only take first 81 tokens for grid rendering, ignore tokens after EOS
+        const gridTokensK = this._extractGridTokens(xKTokens);
+        const gridTokensKPlus1 = this._extractGridTokens(xKPlus1Tokens);
+        
+        // Render main grid (show x_k_plus_1 grid state)
+        for (let i = 0; i < 81; i++) {
+          const token = gridTokensKPlus1[i] || '0'; // Default to EMPTY
+          const cell = cells[i];
+          const row = Math.floor(i / 9);
+          const col = i % 9;
+          
+          // Clear old styles
+          cell.classList.remove('empty', 'mask', 'changed', 'branch-start', 'branch-failed');
+          cell.style.background = '';
+          cell.style.color = '';
+          
+          // Set content and basic style
+          if (token === '0') {
+            cell.textContent = '';
+            cell.classList.add('empty');
+          } else if (token === '10') {
+            cell.textContent = 'M';
+            cell.classList.add('mask');
+          } else if (token === '27') {
+            // NORMAL token should not display in grid
+            cell.textContent = '';
+            cell.classList.add('empty');
+          } else {
+            cell.textContent = token;
+          }
+          
+          // 🔥 Fix: Apply branch colors - use unified palette
+          if (visualInfo && visualInfo.colorGrid && visualInfo.colorGrid[i]) {
+            const colorIndex = visualInfo.colorGrid[i];
+            const color = palette[colorIndex % palette.length];
+            if (color && color !== '#ffffff') {
+              cell.style.background = color;
+              cell.style.color = '#1a202c';
+              // 🔥 Debug info
+              console.log(`Grid cell ${i}: colorIndex=${colorIndex}, color=${color}`);
+            }
+          }
+          
+          // Add branch start marker
+          const cellKey = `${row}-${col}`;
+          if (visualInfo?.branchStartMarkers?.[cellKey]) {
+            const marker = visualInfo.branchStartMarkers[cellKey];
+            cell.classList.add('branch-start');
+            if (marker.status === 'failed') {
+              cell.classList.add('branch-failed');
+            }
+            cell.title = marker.status === 'failed' ? 
+              `💀 Failed branch start` : 
+              `🌿 Branch start - Branch ${marker.branchId}`;
+          }
+          
+          // Highlight changed positions
+          const tokenK = gridTokensK[i] || '0';
+          if (tokenK !== token) {
+            cell.classList.add('changed');
+          }
+        }
+
+        // Render diff grid (show changes only)
+        for (let i = 0; i < 81; i++) {
+          const diffCell = diffCells[i];
+          diffCell.classList.remove('changed', 'mask');
+          diffCell.textContent = '';
+          
+          const tokenK = gridTokensK[i] || '0';
+          const tokenKPlus1 = gridTokensKPlus1[i] || '0';
+          
+          if (tokenK !== tokenKPlus1) {
+            diffCell.classList.add('changed');
+            if (tokenKPlus1 === '10') {
+              diffCell.classList.add('mask');
+              diffCell.textContent = 'M';
+            } else if (tokenKPlus1 === '0') {
+              diffCell.textContent = '∅';
+            } else {
+              diffCell.textContent = tokenKPlus1;
+            }
+          }
+
+        }
+      }
+      
+      _extractGridTokens(tokens) {
+        // 🔥 Fix: Dynamically extract grid values based on separator, handle expansion/contraction position offset
+        const gridTokens = [];
+        
+        // 🔥 Key fix: Split cells based on separator token
+        const cells = this._splitTokensBySeparator(tokens);
+        
+        // Only take value tokens from first 81 cells
+        for (let cellIdx = 0; cellIdx < 81; cellIdx++) {
+          if (cellIdx < cells.length && cells[cellIdx].length > 0) {
+            const cellTokens = cells[cellIdx];
+            
+            // 🔥 New: Check if cell contains MASK token (10)
+            // During backtrack, branch start format is like: "1 [COLOR_5] [MASK]"
+            // Need to prioritize showing MASK over first digit token
+            if (cellTokens.includes('10')) {
+              gridTokens.push('10'); // MASK token
+              // 🔥 Debug info: Log cells containing MASK
+              console.log(`🎭 Cell ${cellIdx}: Detected MASK token, cell content:`, cellTokens);
+            } else {
+              const valueToken = cellTokens[0];  // First token of each cell is value
+              gridTokens.push(valueToken);
+            }
+          } else {
+            gridTokens.push('0'); // Default EMPTY
+          }
+        }
+        
+        return gridTokens;
+      }
+      
+      _splitTokensBySeparator(tokens) {
+        // 🔥 Fix: Split cells based on separator token, keep separator as 4th token of cell
+        const cells = [];
+        let currentCell = [];
+        
+        for (const token of tokens) {
+          if (token === '30') {  // SEPARATOR_TOKEN
+            // Met separator, add it to current cell and complete cell
+            currentCell.push(token);
+            if (currentCell.length > 0) {
+              cells.push(currentCell);
+              currentCell = [];
+            }
+          } else if (token === '31') {  // EOS_TOKEN
+            // Met EOS, end processing
+            break;
+          } else {
+            // Regular token, add to current cell
+            currentCell.push(token);
+          }
+        }
+        
+        // Handle last cell (if not ending with separator)
+        if (currentCell.length > 0) {
+          cells.push(currentCell);
+        }
+        
+        return cells;
+      }
+      
+      _buildTokenChangeMap(targetTokens, compareTokens) {
+        // 🔥 New: Build intelligent token change map, handle expansion/contraction
+        const changeMap = new Map();
+        
+        if (targetTokens.length === compareTokens.length) {
+          // Same length: simple position comparison
+          for (let i = 0; i < targetTokens.length; i++) {
+            if (targetTokens[i] !== compareTokens[i]) {
+              changeMap.set(i, {
+                type: 'modify',
+                from: compareTokens[i],
+                to: targetTokens[i]
+              });
+            }
+          }
+        } else {
+          // Different length: intelligent comparison based on cell structure
+          const targetCells = this._splitTokensBySeparator(targetTokens);
+          const compareCells = this._splitTokensBySeparator(compareTokens);
+          
+          let targetPos = 0;
+          
+          for (let cellIdx = 0; cellIdx < Math.max(targetCells.length, compareCells.length); cellIdx++) {
+            const targetCell = targetCells[cellIdx] || [];
+            const compareCell = compareCells[cellIdx] || [];
+            
+            if (targetCell.length !== compareCell.length) {
+              // 🔥 Fix: Only mark truly changed tokens when cell length changes
+              if (targetCell.length > compareCell.length) {
+                // expansion: carefully compare each position
+                for (let j = 0; j < targetCell.length; j++) {
+                  if (j < compareCell.length) {
+                    // Position exists in original cell, check if really changed
+                    if (targetCell[j] !== compareCell[j]) {
+                      changeMap.set(targetPos + j, {
+                        type: 'modify',
+                        from: compareCell[j],
+                        to: targetCell[j]
+                      });
+                    }
+                  } else {
+                    // New token position (inserted by expansion)
+                    changeMap.set(targetPos + j, {
+                      type: 'expand',
+                      from: 'N/A',
+                      to: targetCell[j]
+                    });
+                  }
+                }
+              } else {
+                // contraction: mark deletion effect
+                for (let j = 0; j < targetCell.length; j++) {
+                  changeMap.set(targetPos + j, {
+                    type: 'contract',
+                    from: 'N/A',
+                    to: targetCell[j]
+                  });
+                }
+              }
+            } else {
+              // Same cell length: compare each
+              for (let j = 0; j < targetCell.length; j++) {
+                if (targetCell[j] !== compareCell[j]) {
+                  changeMap.set(targetPos + j, {
+                    type: 'modify',
+                    from: compareCell[j],
+                    to: targetCell[j]
+                  });
+                }
+              }
+            }
+            
+            targetPos += targetCell.length + 1; // +1 for separator
+          }
+        }
+        
+        return changeMap;
+      }
+
+      _renderSequences(xKTokens, xKPlus1Tokens, yStarTokens) {
+        // Render raw token sequences
+        this.xKEl.innerHTML = this._formatSequence(xKTokens, xKTokens) + 
+          `<div class="seq-info">Length: ${xKTokens.length}</div>`;
+        this.xKPlus1El.innerHTML = this._formatSequence(xKPlus1Tokens, xKTokens) + 
+          `<div class="seq-info">Length: ${xKPlus1Tokens.length}</div>`;
+        this.yStarEl.innerHTML = this._formatSequence(yStarTokens, xKTokens) + 
+          `<div class="seq-info">Length: ${yStarTokens.length}</div>`;
+          
+        // Render decoded sequences
+        this.xKDecodedEl.innerHTML = this._formatDecodedSequence(xKTokens, xKTokens);
+        this.xKPlus1DecodedEl.innerHTML = this._formatDecodedSequence(xKPlus1Tokens, xKTokens);
+        this.yStarDecodedEl.innerHTML = this._formatDecodedSequence(yStarTokens, xKTokens);
+      }
+
+      _formatSequence(tokens, compareTokens = []) {
+        // 🔥 Fix: Use intelligent token comparison instead of simple position comparison
+        const changeMap = this._buildTokenChangeMap(tokens, compareTokens);
+        
+        return tokens.map((token, i) => {
+          const span = document.createElement('span');
+          span.className = 'token';
+          span.textContent = token;
+          span.title = `Position ${i}: Token=${token}`;
+          
+          // 🔥 Use intelligent change detection
+          if (changeMap.has(i)) {
+            span.classList.add('changed');
+            const changeInfo = changeMap.get(i);
+            span.title += ` (${changeInfo.type}: ${changeInfo.from} → ${changeInfo.to})`;
+          }
+          
+          if (token === '0') span.classList.add('empty');
+          else if (token === '10') span.classList.add('mask');
+          
+          return span.outerHTML;
+        }).join(' ');
+      }
+      
+      _formatDecodedSequence(tokens, compareTokens = []) {
+        // 🔥 Fix: Use intelligent token comparison to show decoded vocabulary meaning
+        const changeMap = this._buildTokenChangeMap(tokens, compareTokens);
+        
+        return tokens.map((token, i) => {
+          const span = document.createElement('span');
+          span.className = 'token';
+          
+          const vocab = this.tokenVocab[token] || token;
+          span.textContent = vocab;
+          span.title = `Position ${i}: Token=${token} → ${vocab}`;
+          
+          // 🔥 Use intelligent change detection
+          if (changeMap.has(i)) {
+            span.classList.add('changed');
+            const changeInfo = changeMap.get(i);
+            const fromVocab = this.tokenVocab[changeInfo.from] || changeInfo.from;
+            const toVocab = this.tokenVocab[changeInfo.to] || changeInfo.to;
+            span.title += ` (${changeInfo.type}: ${fromVocab} → ${toVocab})`;
+          }
+          
+          // Basic token type styles
+          if (token === '0') {
+            span.classList.add('empty');
+          } else if (token === '10') {
+            span.classList.add('mask');
+          }
+          
+          // Special marker color styles
+          if (token === '27') {
+            span.classList.add('normal');
+          } else if (token === '28') {
+            span.classList.add('skull');
+          } else if (token === '29') {
+            span.classList.add('branch');
+          }
+          
+          // 🔥 Fix: Color marker background style - use unified palette (support 15 branch colors)
+          const colorTokenNum = parseInt(token);
+          if (colorTokenNum >= 11 && colorTokenNum <= 26) {
+            const paletteIndex = colorTokenNum - 11; // WHITE=11→0, COLOR_1=12→1, ..., COLOR_15=26→15
+            const color = this.colorPalette[paletteIndex];
+            if (color && color !== '#ffffff') {
+              span.style.backgroundColor = color;
+              // 🔥 Debug info
+              console.log(`Token ${token} (${vocab}): paletteIndex=${paletteIndex}, color=${color}`);
+            }
+          }
+          
+          return span.outerHTML;
+        }).join(' ');
+      }
+
+      _renderLabels(rStar, eStar, cStar) {
+        this.rStarEl.innerHTML = this._formatLabelBits('r_star', rStar);
+        this.eStarEl.innerHTML = this._formatLabelBits('e_star', eStar);
+        this.cStarEl.innerHTML = this._formatLabelBits('c_star', cStar);
+        
+        // Update toggle button text
+        document.getElementById('r_toggle').textContent = this.showFullLabels.r_star ? 'Collapse' : 'All';
+        document.getElementById('e_toggle').textContent = this.showFullLabels.e_star ? 'Collapse' : 'All';
+        document.getElementById('c_toggle').textContent = this.showFullLabels.c_star ? 'Collapse' : 'All';
+      }
+
+      _formatLabelBits(labelType, bits) {
+        const showFull = this.showFullLabels[labelType];
+        const maxShow = showFull ? bits.length : 20;
+        
+        let html = '';
+        for (let i = 0; i < Math.min(maxShow, bits.length); i++) {
+          const bit = bits[i];
+          html += `<span class="label-bit ${bit ? 'active' : 'inactive'}" title="Position ${i}: ${bit}">${bit}</span>`;
+        }
+        
+        if (!showFull && bits.length > 20) {
+          html += '<span style="color:#718096">... </span>';
+        }
+        
+        return html;
+      }
+      
+      toggleLabelView(labelType) {
+        this.showFullLabels[labelType] = !this.showFullLabels[labelType];
+        this._renderSample(); // Re-render current sample
+      }
+      
+      jumpToProgress(event) {
+        if (!this.samples.length) return;
+        
+        const rect = this.progressEl.getBoundingClientRect();
+        const clickX = event.clientX - rect.left;
+        const percentage = clickX / rect.width;
+        const targetIndex = Math.round(percentage * (this.samples.length - 1));
+        
+        this.currentIndex = Math.max(0, Math.min(targetIndex, this.samples.length - 1));
+        this.pause(); // Pause playback
+        this._renderSample();
+        this._updateButtons();
+      }
+
+      _renderMetadata(sample) {
+        const metadata = sample.solver_metadata;
+        
+        this.sampleIdEl.textContent = metadata.sample_id || '-';
+        this.operationEl.textContent = metadata.operation || '-';
+        this.positionEl.textContent = metadata.position ? `(${metadata.position[0]}, ${metadata.position[1]})` : '-';
+        this.targetValueEl.textContent = metadata.target_value || '-';
+        
+        // 🎯 Enhanced sequence length display - 🔥 Fix: Support new and old formats
+        const getTokenLength = (data) => {
+            if (Array.isArray(data)) {
+                return data.length;  // New format: get array length directly
+            } else if (typeof data === 'string') {
+                return data.split(' ').length;  // Old format: get length after split
+            }
+            return 0;
+        };
+        
+        const xKLen = getTokenLength(sample.x_k);
+        const xKPlus1Len = getTokenLength(sample.x_k_plus_1);
+        const lengthChange = xKPlus1Len - xKLen;
+        let lengthText = `${xKLen} → ${xKPlus1Len}`;
+        if (lengthChange > 0) {
+          lengthText += ` (+${lengthChange})`;
+        } else if (lengthChange < 0) {
+          lengthText += ` (${lengthChange})`;
+        }
+        this.seqLengthEl.textContent = lengthText;
+        
+        const rCount = sample.r_star.reduce((a,b) => a+b, 0);
+        const eCount = sample.e_star.reduce((a,b) => a+b, 0);
+        const cCount = sample.c_star.reduce((a,b) => a+b, 0);
+        this.operationStatsEl.textContent = `R:${rCount} E:${eCount} C:${cCount}`;
+        
+        // 🎯 Add operation type hints
+        const opTypeHints = {
+          'assign_remask': 'Deterministic fill - Step 1: EMPTY → MASK',
+          'assign_unmask': 'Deterministic fill - Step 2: MASK → Digit',
+          'branch_remask': 'Branch creation - Step 1: EMPTY → MASK', 
+          'branch_unmask': 'Branch creation - Step 2: MASK → Digit+Expand',
+          'final_eos': 'Final state: Add EOS marker'
+        };
+        this.descEl.textContent = opTypeHints[metadata.operation] || metadata.operation;
+      }
+    }
+
+    // Initialize application
+    const animator = new APMDMAnimator();
+    window.apmdmAnimator = animator;
+  </script>
+</body>
+</html>
+

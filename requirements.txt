@@ -1,0 +1,45 @@
+# ========================================
+# Flash-Attention Installation:
+#    pip install flash-attn --no-build-isolation
+# ======================================== 
+
+torch>=2.0.0
+torchvision>=0.15.0
+
+lightning>=2.0.0
+pytorch-lightning>=2.0.0
+
+transformers>=4.30.0
+datasets==2.14.0
+tokenizers>=0.13.0
+
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+
+einops>=0.6.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+scikit-learn>=1.3.0
+timm
+huggingface-hub>=0.15.0
+hf-transfer>=0.1.0
+
+wandb>=0.15.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tensorboard>=2.13.0
+
+pandas>=2.0.0
+pillow>=9.5.0
+
+tqdm>=4.65.0
+rich>=13.0.0
+
+ipython>=8.12.0
+jupyter>=1.0.0
+notebook>=6.5.0
+
+psutil>=5.9.0
+pyyaml>=6.0
+packaging>=23.0
