@@ -47,15 +47,18 @@ python parity_generator.py
 
 This generates `parity_train.pkl.gz` containing 7 APMDM training samples (expanded to 1000 with repetition) and `parity_vocab_cache.pkl` containing the token vocabulary (5 tokens: BOS, EOS, MASK, 0, 1).
 
-### Graph Generation
+### Graph Generation (Max Flow)
 
-
-
+```bash
+cd dataset/max_flow
 python maxflow_solver.py \
   --num_instances 10000 \
   --min_nodes 10 --max_nodes 10 \
   --min_edges 50 --max_edges 50 \
   --output graph.pkl.gz
+```
+
+This generates `graph.pkl.gz` containing APMDM training samples for max-flow problems and `vocab_cache.pkl` containing the token vocabulary. Customize graph parameters: `--num_instances` (number of graphs), `--min_nodes/max_nodes` (node count range), `--min_edges/max_edges` (edge count range), `--min_flow/max_flow` (flow guarantee range).
 
 <!-- 
 Create a folder `/data` and prepare datasets by running the following code:
