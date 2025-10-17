@@ -1,0 +1,9 @@
+/workspace/env/bin/python main.py --config-name=parity\
+                data.dataset_path='/workspace/projects/GDLM/parity/parity_data/parity_train.pkl.gz' \
+                data.vocab_cache_path='/workspace/projects/GDLM/parity/parity_data/parity_vocab_cache.pkl' \
+                model.vocab_size=6 \
+                model.length=3 \
+                wandb.offline=true \
+                loader.num_workers=16 \
+                checkpointing.save_dir='/workspace/projects/AP-MDM/train/outputs' \
+                checkpointing.every_n_train_steps=100 \
