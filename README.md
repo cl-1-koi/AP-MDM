@@ -28,6 +28,10 @@ pip install flash-attn --no-build-isolation
 
 ## Datasets
 
+<p align="center">
+    <img width="800" src="assets/examples.png">
+</p>
+
 ### Sudoku
 
 ```bash
@@ -46,7 +50,7 @@ python parity_generator.py
 
 This generates `parity_train.pkl.gz` containing 7 APMDM training samples (expanded to 1000 with repetition) and `parity_vocab_cache.pkl` containing the token vocabulary (5 tokens: BOS, EOS, MASK, 0, 1).
 
-### Graph Generation (Max Flow)
+### Graph Generation
 
 ```bash
 cd dataset/max_flow
