@@ -28,10 +28,6 @@ pip install flash-attn --no-build-isolation
 
 ## Datasets
 
-<p align="center">
-    <img width="800" src="assets/examples.png">
-</p>
-
 ### Sudoku
 
 ```bash
