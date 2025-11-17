@@ -64,6 +64,8 @@ This generates `graph.pkl.gz` containing APMDM training samples for max-flow pro
 
 See scripts in `train/scripts`.
 
+> **Note:** In our implementation, we use the word *contraction* for *deletion* and *expansion* for *insertion*. **R**, **E**, **C** denote *remasking*, *expansion/insertion*, and *contraction/deletion* signals, respectively.
+
 ## Citation
 
 If you find our codes useful, please consider citing our work
