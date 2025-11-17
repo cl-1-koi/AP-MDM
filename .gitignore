@@ -59,7 +59,6 @@ logs/
 *.onnx
 
 datasets/
-data/
 *.csv
 *.json
 *.jsonl
