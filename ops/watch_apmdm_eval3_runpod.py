@@ -167,7 +167,10 @@ def main() -> None:
             while time.monotonic() < go7_deadline:
                 if go7_path.is_file():
                     go7 = json.loads(go7_path.read_text())
-                    if go7.get("pod_retained") and go7.get("kind") == "successful_completion":
+                    if go7.get("pod_retained") and go7.get("kind") in {
+                        "successful_completion",
+                        "failed_run_diagnostics",
+                    }:
                         closure["go7_artifact_closure_sha256"] = digest(go7_path)
                         break
                 time.sleep(15)
