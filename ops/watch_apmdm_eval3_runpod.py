@@ -125,13 +125,20 @@ def terminate_and_verify() -> dict[str, Any]:
 
 
 def main() -> None:
+    global POD_ID, ENDPOINT, PORT
     parser = argparse.ArgumentParser()
+    parser.add_argument("--pod-id", default=POD_ID)
+    parser.add_argument("--endpoint", default=ENDPOINT)
+    parser.add_argument("--port", default=PORT)
     parser.add_argument("--remote-dir", required=True)
     parser.add_argument("--local-dir", required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--go7-closure", required=True)
     parser.add_argument("--max-seconds", type=int, default=12000)
     args = parser.parse_args()
+    POD_ID = args.pod_id
+    ENDPOINT = args.endpoint
+    PORT = str(args.port)
     local_dir = Path(args.local_dir).resolve()
     local_dir.mkdir(parents=True, exist_ok=True)
     log_path = local_dir / "watcher.jsonl"
