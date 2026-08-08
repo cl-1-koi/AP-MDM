@@ -48,6 +48,11 @@ class SequentialChunkDataLoader:
         return self.dataset.iter_chunks_sequentially(self.batch_size, self.tokenizer)
 
 
+def is_sequential_chunk_loader(loader) -> bool:
+    """True when replacing ``loader`` would destroy chunk-local iteration."""
+    return isinstance(loader, SequentialChunkDataLoader)
+
+
 # Detokenization functions
 def wt_detokenizer(string):
     """WikiText detokenizer"""

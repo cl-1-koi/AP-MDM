@@ -66,3 +66,12 @@ def test_replacement_loader_preserves_tensor_collation():
     assert isinstance(batch["input_ids"], torch.Tensor)
     assert batch["input_ids"].shape == (2, 4)
     assert batch["target_ids"].shape == (2, 4)
+
+
+def test_chunk_loader_is_marked_for_preservation_across_epochs():
+    wrapper = dataloader.SequentialChunkDataLoader(
+        TinyChunkDataset(), 2, TinyTokenizer()
+    )
+    assert dataloader.is_sequential_chunk_loader(wrapper)
+    ordinary = torch.utils.data.DataLoader(TinyChunkDataset(), batch_size=2)
+    assert not dataloader.is_sequential_chunk_loader(ordinary)
