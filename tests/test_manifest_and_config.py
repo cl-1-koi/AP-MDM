@@ -235,5 +235,5 @@ def test_cli_help_works_without_a_gpu():
         cwd=str(repo_root()), capture_output=True, text=True, timeout=180,
     )
     assert result.returncode == 0
-    for command in ("authenticate", "generate", "manifest", "train", "evaluate", "preflight", "smoke"):
+    for command in ("authenticate", "generate", "manifest", "train", "evaluate", "benchmark", "preflight", "smoke"):
         assert command in result.stdout

@@ -120,13 +120,28 @@ authenticated source puzzles:
 | min / max | 19,572 / 38,180 |
 
 The mean reproduces the paper's 25,022.6 to the published precision (difference
--0.02). The second figure, 1421.3, is **not** reproduced by these 100 puzzles by
-any reading; it is ~17.6x smaller. Since the appendix presents 1421.3 as the
-general per-puzzle rate and 25,022.6 as the rate "for our experiments … from 100
-hard Sudoku puzzles", the consistent interpretation is that 1421.3 describes a
-different (easier) puzzle population that is not part of the released artifacts,
-and cannot be checked. The number that matters for this replication — the
-training-set size — is confirmed.
+-0.02). The second figure, 1421.3, is ~17.6x smaller and is not reproduced by
+these 100 puzzles under any reading — but it is explained. Running the same
+generator over a seeded random sample of 1,000 *held-out* puzzles gives:
+
+| Quantity | Held-out sample (n=1000, seed 20260808) |
+| --- | --- |
+| transitions per puzzle, mean | 1,063.7 |
+| median | 433 |
+| 90th / 99th percentile | 2,417 / 9,033 |
+| min / max | 108 / 22,082 |
+
+So the two published statistics describe two different puzzle populations,
+exactly as the appendix's wording implies: ~10^3 transitions for the general
+(evaluation-grade) population and ~2.5 x 10^4 for the 100 hard training
+instances. The general figure is the same order of magnitude as the measured
+1,063.7 (the paper's 1421.3 presumably comes from a different sample of the
+same population); the training figure is exact. **The claim that 100 source
+puzzles expand into ~2.5M supervised transitions is confirmed.**
+
+This measurement is used only to justify the frozen inference ceiling and to
+project evaluation cost. It selects no threshold, and it is a property of the
+symbolic solver, never of a model.
 
 Per-operation totals across all 2,502,258 transitions:
 

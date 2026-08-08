@@ -349,6 +349,107 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------
 
 
+def cmd_benchmark(args: argparse.Namespace) -> int:
+    """Measure forward-pass and optimizer-step throughput for cost projection."""
+    import torch
+
+    from repro.losses import supervised_loss
+    from repro.smoke import four_operation_fixture
+
+    _set_data_root(args.data_root)
+    cfg = load_paper_config()
+    device = torch.device(args.device if (args.device != "cuda" or torch.cuda.is_available()) else "cpu")
+    model = build_model(cfg.model, time_conditioning=cfg.time_conditioning, seed=cfg.seed).to(device)
+    autocast = torch.bfloat16 if (device.type == "cuda" and args.bf16) else None
+
+    batch = {
+        k: v.to(device)
+        for k, v in four_operation_fixture(batch=args.batch_size, length=vocab.SEQUENCE_LENGTH).items()
+    }
+    params = sum(p.numel() for p in model.parameters())
+    tokens = args.batch_size * vocab.SEQUENCE_LENGTH
+
+    def sync():
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+
+    # ---- inference forward passes ----
+    model.eval()
+    with torch.no_grad():
+        for _ in range(args.warmup):
+            model(batch["x_k"]) if autocast is None else _autocast_forward(model, batch["x_k"], autocast)
+        sync()
+        start = time.perf_counter()
+        for _ in range(args.iters):
+            model(batch["x_k"]) if autocast is None else _autocast_forward(model, batch["x_k"], autocast)
+        sync()
+        forward_seconds = (time.perf_counter() - start) / args.iters
+
+    # ---- training steps ----
+    model.train()
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=cfg.optim.lr, betas=(cfg.optim.beta1, cfg.optim.beta2),
+        eps=cfg.optim.eps, weight_decay=cfg.optim.weight_decay,
+    )
+
+    def one_step():
+        optimizer.zero_grad(set_to_none=True)
+        outputs = model(batch["x_k"]) if autocast is None else _autocast_forward(model, batch["x_k"], autocast)
+        loss = supervised_loss(
+            outputs, batch["x_k"], batch["y_star"], batch["r_star"], batch["e_star"],
+            batch["c_star"], attention_mask=batch["attention_mask"],
+        )
+        loss.total.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.gradient_clip_val)
+        optimizer.step()
+
+    for _ in range(args.warmup):
+        one_step()
+    sync()
+    start = time.perf_counter()
+    for _ in range(args.iters):
+        one_step()
+    sync()
+    step_seconds = (time.perf_counter() - start) / args.iters
+
+    report = {
+        "device": str(device),
+        "bf16_autocast": autocast is not None,
+        "batch_size": args.batch_size,
+        "sequence_length": vocab.SEQUENCE_LENGTH,
+        "parameters": params,
+        "iters": args.iters,
+        "forward_seconds_per_pass": forward_seconds,
+        "forward_sequences_per_second": args.batch_size / forward_seconds,
+        "forward_tflops_effective": 2 * params * tokens / forward_seconds / 1e12,
+        "train_seconds_per_step": step_seconds,
+        "train_steps_per_second": 1.0 / step_seconds,
+        "train_tokens_per_second": tokens / step_seconds,
+        "train_tflops_effective": 6 * params * tokens / step_seconds / 1e12,
+        "projected_hours_1M_steps": step_seconds * 1_000_000 / 3600,
+        "note": (
+            "Effective TFLOP/s uses the 2ND (inference) and 6ND (training) "
+            "convention and excludes attention FLOPs, so it is a lower bound."
+        ),
+        **{f"gpu_{k}": v for k, v in _gpu_snapshot().items()},
+    }
+    _emit(report, args.out)
+    return 0
+
+
+def _autocast_forward(model, x, dtype):
+    import torch
+
+    with torch.autocast(device_type="cuda", dtype=dtype):
+        return model(x)
+
+
+def _gpu_snapshot() -> dict:
+    from repro.telemetry import gpu_snapshot
+
+    return gpu_snapshot()
+
+
 def cmd_preflight(args: argparse.Namespace) -> int:
     from repro.supervisor import preflight_report
 
@@ -432,6 +533,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--progress-every", type=int, default=0)
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_evaluate)
+
+    p = sub.add_parser("benchmark", help="measure throughput for the cost projection")
+    p.add_argument("--device", default="cuda")
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--iters", type=int, default=20)
+    p.add_argument("--warmup", type=int, default=5)
+    p.add_argument("--bf16", action="store_true")
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_benchmark)
 
     p = sub.add_parser("preflight", help="fail-closed GPU supervisor preflight")
     p.add_argument("--ceiling-seconds", type=float, default=900.0)
