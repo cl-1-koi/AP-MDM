@@ -275,6 +275,142 @@ def cmd_train(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# monotone insertion ladder
+# --------------------------------------------------------------------------
+
+
+def _insertion_settings_from_args(args: argparse.Namespace):
+    from repro.insertion_trainer import InsertionTrainerSettings
+
+    return InsertionTrainerSettings(
+        arm=args.arm,
+        run_id=args.run_id,
+        max_steps=args.max_steps,
+        batch_size=args.batch_size,
+        checkpoint_every=args.checkpoint_every,
+        log_every=args.log_every,
+        eval_every=args.eval_every,
+        eval_limit=args.eval_limit,
+        device=args.device,
+        seed=args.seed,
+        q_lr_ratio=args.q_lr_ratio,
+        bf16=args.bf16,
+        time_budget_seconds=args.time_budget,
+    )
+
+
+def cmd_insertion_manifest(args: argparse.Namespace) -> int:
+    import torch
+
+    from repro.insertion import (
+        SudokuInsertionPolicy,
+        SudokuOrderPosterior,
+        default_posterior_spec,
+        effective_model_spec,
+    )
+    from repro.insertion_trainer import build_insertion_manifest
+
+    _set_data_root(args.data_root)
+    cfg = load_paper_config()
+    settings = _insertion_settings_from_args(args)
+    train = data_mod.load_split("train")
+    test = data_mod.load_split("test")
+    overlap = data_mod.measure_overlap(train, test)
+    data_mod.assert_no_leakage(overlap)
+    torch.manual_seed(settings.seed)
+    policy = SudokuInsertionPolicy(effective_model_spec(cfg.model))
+    posterior = (
+        SudokuOrderPosterior(default_posterior_spec(policy.spec))
+        if settings.arm == "learned_insertion"
+        else None
+    )
+    run_dir = _run_dir(settings.run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    manifest = build_insertion_manifest(
+        config=cfg,
+        settings=settings,
+        train=train,
+        test=test,
+        overlap=overlap.as_dict(),
+        policy=policy,
+        posterior=posterior,
+        run_dir=run_dir,
+    )
+    path = run_dir / "manifest.json"
+    if path.exists() and not args.force:
+        raise RuntimeError(f"refusing to overwrite existing manifest: {path}")
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True, default=str))
+    _emit(
+        {
+            "manifest": str(path),
+            "manifest_sha256": manifest["seal"]["manifest_sha256"],
+            "policy_parameters": manifest["architecture"]["policy_parameters"],
+            "posterior_parameters": manifest["architecture"]["posterior_parameters"],
+        },
+        args.out,
+    )
+    return 0
+
+
+def _settings_from_insertion_manifest(manifest: dict):
+    from repro.insertion_trainer import InsertionTrainerSettings
+
+    fields = dict(manifest["training"])
+    return InsertionTrainerSettings(**fields)
+
+
+def cmd_insertion_train(args: argparse.Namespace) -> int:
+    from repro.insertion_trainer import (
+        InsertionTrainer,
+        verify_insertion_manifest,
+    )
+
+    _set_data_root(args.data_root)
+    cfg = load_paper_config()
+    run_dir = _run_dir(args.run_id)
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    digest = verify_insertion_manifest(manifest)
+    settings = _settings_from_insertion_manifest(manifest)
+    train = data_mod.load_split("train")
+    test = data_mod.load_split("test")
+    overlap = data_mod.measure_overlap(train, test)
+    data_mod.assert_no_leakage(overlap)
+    trainer = InsertionTrainer(cfg, settings, train, test, run_dir, digest)
+    resumed = trainer.maybe_resume() if not args.no_resume else False
+    try:
+        summary = trainer.train()
+    finally:
+        trainer.close()
+    _emit({"resumed": resumed, **summary}, args.out)
+    return 0
+
+
+def cmd_insertion_evaluate(args: argparse.Namespace) -> int:
+    from repro.insertion_trainer import (
+        InsertionTrainer,
+        verify_insertion_manifest,
+    )
+
+    _set_data_root(args.data_root)
+    cfg = load_paper_config()
+    run_dir = _run_dir(args.run_id)
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    digest = verify_insertion_manifest(manifest)
+    settings = _settings_from_insertion_manifest(manifest)
+    train = data_mod.load_split("train")
+    test = data_mod.load_split("test")
+    trainer = InsertionTrainer(cfg, settings, train, test, run_dir, digest)
+    checkpoint = Path(args.checkpoint) if args.checkpoint else run_dir / "checkpoints" / "latest.pt"
+    try:
+        trainer.load_checkpoint(checkpoint)
+        result = trainer.evaluate(limit=args.limit)
+    finally:
+        trainer.close()
+    _emit(result, args.out)
+    return 0
+
+
+# --------------------------------------------------------------------------
 # evaluate
 # --------------------------------------------------------------------------
 
@@ -632,6 +768,44 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_train)
+
+    p = sub.add_parser(
+        "insertion-manifest",
+        help="seal one fixed-AR/random-insertion/learned-insertion Sudoku arm",
+    )
+    p.add_argument("--run-id", required=True)
+    p.add_argument(
+        "--arm",
+        required=True,
+        choices=("fixed_ar", "random_insertion", "learned_insertion"),
+    )
+    p.add_argument("--max-steps", type=int, required=True)
+    p.add_argument("--batch-size", type=int, default=64)
+    p.add_argument("--checkpoint-every", type=int, default=10_000)
+    p.add_argument("--log-every", type=int, default=100)
+    p.add_argument("--eval-every", type=int, default=5_000)
+    p.add_argument("--eval-limit", type=int, default=256)
+    p.add_argument("--device", default="cuda")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--q-lr-ratio", type=float, default=0.01)
+    p.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--time-budget", type=float, default=None)
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_insertion_manifest)
+
+    p = sub.add_parser("insertion-train", help="train a sealed monotone Sudoku arm")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--no-resume", action="store_true")
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_insertion_train)
+
+    p = sub.add_parser("insertion-evaluate", help="evaluate a monotone Sudoku checkpoint")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--checkpoint", default=None)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_insertion_evaluate)
 
     p = sub.add_parser("evaluate", help="evaluate a checkpoint on held-out puzzles")
     p.add_argument("--run-id", required=True)

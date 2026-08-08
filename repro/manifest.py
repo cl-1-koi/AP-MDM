@@ -56,6 +56,8 @@ HASHED_SOURCES: List[str] = [
     "repro/data.py",
     "repro/evaluator.py",
     "repro/hashing.py",
+    "repro/insertion.py",
+    "repro/insertion_trainer.py",
     "repro/losses.py",
     "repro/manifest.py",
     "repro/model.py",
