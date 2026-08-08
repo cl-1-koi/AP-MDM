@@ -92,7 +92,11 @@ def gpu_snapshot(device=None) -> Dict[str, Any]:
 
         if not torch.cuda.is_available():
             return {"cuda": False}
-        dev = device if device is not None else torch.cuda.current_device()
+        dev = torch.device(device) if device is not None else torch.device(
+            "cuda", torch.cuda.current_device()
+        )
+        if dev.type == "cuda" and dev.index is None:
+            dev = torch.device("cuda", torch.cuda.current_device())
         free, total = torch.cuda.mem_get_info(dev)
         return {
             "cuda": True,

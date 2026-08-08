@@ -140,6 +140,7 @@ def build_insertion_manifest(
                     "repro/cli.py",
                     "repro/model.py",
                     "repro/data.py",
+                    "repro/telemetry.py",
                     "train/configs/sudoku_paper.yaml",
                     "tests/test_insertion.py",
                     "tests/test_insertion_trainer.py",

@@ -102,6 +102,11 @@ train=[e for e in events if e.get("kind")=="train"]
 evals=[e for e in events if e.get("kind")=="eval" and e.get("step")==200]
 if len(train) < 10 or len(evals) != 1: raise SystemExit("telemetry cadence incomplete")
 for event in train:
+    if event.get("gpu_cuda") is not True:
+        raise SystemExit("CUDA memory telemetry absent")
+    for key in ("gpu_allocated_bytes", "gpu_reserved_bytes", "gpu_free_bytes", "gpu_total_bytes"):
+        if not isinstance(event.get(key), int):
+            raise SystemExit(f"GPU memory telemetry absent: {key}")
     for key,value in event.items():
         if isinstance(value,float) and not math.isfinite(value): raise SystemExit(f"nonfinite {key}")
 if arm == "learned_insertion":

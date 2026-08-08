@@ -23,6 +23,7 @@ def main():
     p.add_argument("--port",required=True); p.add_argument("--remote-dir",required=True)
     p.add_argument("--local-dir",required=True); p.add_argument("--source-commit",required=True)
     p.add_argument("--arm",required=True); p.add_argument("--max-seconds",type=int,default=1800)
+    p.add_argument("--retain-rationale",default=None)
     a=p.parse_args(); local=Path(a.local_dir).resolve(); local.mkdir(parents=True,exist_ok=True)
     ssh_base=["ssh","-i","/home/ubuntu/.ssh/id_ed25519","-p",str(a.port),"-o","BatchMode=yes","-o","ConnectTimeout=15",a.endpoint]
     started=time.monotonic()
@@ -36,7 +37,23 @@ def main():
         if state in {"complete","failed"}: break
         time.sleep(30)
     else: raise RuntimeError("watcher ceiling exceeded")
-    subprocess.run(["scp","-r","-i","/home/ubuntu/.ssh/id_ed25519","-P",str(a.port),"-o","BatchMode=yes",f"{a.endpoint}:{a.remote_dir}/.",str(local)],check=True)
+    remote_stderr = local / "sync_remote.stderr"
+    with remote_stderr.open("wb") as stderr_handle:
+        remote = subprocess.Popen(
+            ssh_base + ["tar", "-C", a.remote_dir, "-cf", "-", "."],
+            stdout=subprocess.PIPE,
+            stderr=stderr_handle,
+        )
+        assert remote.stdout is not None
+        extracted = subprocess.run(
+            ["tar", "-C", str(local), "-xf", "-"], stdin=remote.stdout
+        )
+        remote.stdout.close()
+        remote_status = remote.wait()
+    if extracted.returncode != 0 or remote_status != 0:
+        raise RuntimeError(
+            f"artifact sync failed: remote={remote_status}, local={extracted.returncode}"
+        )
     closure={"pod_id":a.pod_id,"arm":a.arm,"source_commit":a.source_commit,"synced_utc":now(),"kind":state}
     if state=="complete":
         completion=json.loads((local/"completion.json").read_text())
@@ -53,6 +70,10 @@ def main():
         closure["failure"]=failure
         closure["verified_files"]=[{"path":str(x.relative_to(local)),"sha256":sha(x)} for x in local.rglob("*") if x.is_file()]
     atomic(local/"artifact_closure.json",closure)
+    if a.retain_rationale:
+        closure.update({"retained_utc":now(),"retain_rationale":a.retain_rationale})
+        atomic(local/"artifact_closure.json",closure)
+        return
     cfg=tomli.load(open("/home/ubuntu/.runpod/config.toml","rb")); runpod.api_key=cfg["default"]["api_key"]
     runpod.terminate_pod(a.pod_id)
     deadline=time.monotonic()+180
