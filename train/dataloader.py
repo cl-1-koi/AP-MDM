@@ -21,6 +21,33 @@ import utils
 LOGGER = utils.get_logger(__name__)
 
 
+class SequentialChunkDataLoader:
+    """Minimal re-iterable loader for the chunked AP-MDM dataset.
+
+    ``Diffusion.on_train_start`` replaces incoming loaders with an ordinary
+    ``torch.utils.data.DataLoader`` so it can install a fault-tolerant sampler.
+    Lightning applies that replacement at the next epoch boundary.  Exposing
+    ``collate_fn`` here is therefore required: without it, the replacement's
+    default collator transposes each list-valued sample into a Python list and
+    epoch two fails because ``input_ids`` has no ``shape``.
+    """
+
+    def __init__(self, dataset, batch_size, tokenizer):
+        import apmdm_dataloader as _apmdm
+
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.tokenizer = tokenizer
+        self.sampler = None  # Lightning compatibility
+        self.collate_fn = functools.partial(_apmdm.collate_fn, tokenizer=tokenizer)
+
+    def __len__(self):
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
+
+    def __iter__(self):
+        return self.dataset.iter_chunks_sequentially(self.batch_size, self.tokenizer)
+
+
 # Detokenization functions
 def wt_detokenizer(string):
     """WikiText detokenizer"""
@@ -644,20 +671,6 @@ def get_dataloaders(config, tokenizer, skip_train=False,
             
             # ChunkedStreamingDataset uses sequential chunk access to avoid multiprocessing issues
             LOGGER.info("🌊 Detected ChunkedStreamingDataset, using sequential chunk access mode")
-            
-            # Custom DataLoader for sequential chunk iteration
-            class SequentialChunkDataLoader:
-                def __init__(self, dataset, batch_size, tokenizer):
-                    self.dataset = dataset
-                    self.batch_size = batch_size
-                    self.tokenizer = tokenizer
-                    self.sampler = None  # Lightning compatibility
-                
-                def __len__(self):
-                    return (len(self.dataset) + self.batch_size - 1) // self.batch_size
-                
-                def __iter__(self):
-                    return self.dataset.iter_chunks_sequentially(self.batch_size, self.tokenizer)
             
             train_loader = SequentialChunkDataLoader(train_set.data, config.loader.batch_size, tokenizer)
             
