@@ -1,0 +1,23 @@
+# Reproducible environment for the AP-MDM Sudoku replication (repro/ package).
+#
+# Deliberately much smaller than the upstream train/ stack: the replication
+# does not use Lightning, Hydra, transformers, wandb or FlashAttention.
+#
+# Verified working set on the target machine (A10, CUDA 12.8, Python 3.10.12):
+#   torch   2.7.0+cu128
+#   numpy   1.26.4
+#   PyYAML  5.4.1
+#   pytest  9.1.0
+#
+# Create the environment outside the Git work tree, e.g.
+#   python3 -m venv --system-site-packages ~/apmdm-repro-env/venv
+#   ~/apmdm-repro-env/venv/bin/pip install -r repro/requirements.txt
+#
+# FlashAttention is intentionally absent: no wheel exists for torch 2.7.0 /
+# cu12.8 on this host, so repro/model.py uses torch SDPA.  See
+# SUDOKU_PAPER_CODE_AUDIT_20260808.md section 2.10.
+
+torch>=2.1
+numpy>=1.24,<2.0
+PyYAML>=5.4
+pytest>=7.0
