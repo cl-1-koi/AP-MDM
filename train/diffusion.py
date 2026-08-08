@@ -178,6 +178,16 @@ class Diffusion(L.LightningModule):
         updated_dls = []
         if self.trainer.fit_loop._combined_loader:
             for dl in self.trainer.fit_loop._combined_loader.flattened:
+                # The chunk loader already yields fully collated batches in
+                # sequential chunk order and is re-iterable across epochs.
+                # Replacing it with a random-index DataLoader makes every
+                # worker reopen unrelated 10k-sample pickle chunks, leaving
+                # the GPU idle at the first epoch boundary.  It also changes
+                # the declared streaming data path.  Keep this loader intact;
+                # the replacement below is only for ordinary datasets.
+                if dataloader.is_sequential_chunk_loader(dl):
+                    updated_dls.append(dl)
+                    continue
                 if hasattr(dl.sampler, 'shuffle'):
                     dl_sampler = sampler_cls(dl.dataset, shuffle=dl.sampler.shuffle)
                 else:
