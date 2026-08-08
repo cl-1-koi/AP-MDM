@@ -91,3 +91,34 @@ def test_insertion_manifest_seal_detects_mutation(
     manifest["training"]["max_steps"] = 11
     with pytest.raises(RuntimeError, match="seal mismatch"):
         verify_insertion_manifest(manifest)
+
+
+def test_insertion_manifest_records_explicit_paid_capacity_authorization(
+    tmp_path, paper_config, train_split, test_split, monkeypatch
+):
+    authorization = "owner_authorized_test_value"
+    monkeypatch.setenv("APMDM_INSERTION_PAID_CAPACITY_AUTHORIZATION", authorization)
+    config = tiny_config(paper_config)
+    settings = InsertionTrainerSettings(
+        arm="fixed_ar",
+        run_id="paid-capacity-test",
+        max_steps=10,
+        batch_size=2,
+        device="cpu",
+        bf16=False,
+    )
+    policy = SudokuInsertionPolicy(effective_model_spec(config.model))
+    overlap = data_mod.measure_overlap(train_split, test_split)
+    manifest = build_insertion_manifest(
+        config=config,
+        settings=settings,
+        train=train_split,
+        test=test_split,
+        overlap=overlap.as_dict(),
+        policy=policy,
+        posterior=None,
+        run_dir=tmp_path / "paid-capacity-run",
+    )
+    assert manifest["compute"]["paid_capacity"] == authorization
+    assert "RunPod A40 R0" in manifest["compute"]["initial_execution"]
+    assert verify_insertion_manifest(manifest) == manifest["seal"]["manifest_sha256"]

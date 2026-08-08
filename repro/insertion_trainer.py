@@ -92,6 +92,9 @@ def build_insertion_manifest(
     paper_path = Path("/home/ubuntu/papers/2606.02133/2606.02133v3.pdf")
     source_path = Path("/home/ubuntu/papers/2606.02133/2606.02133v3-source.tar")
     status = _git("status", "--porcelain") or ""
+    paid_authorization = os.environ.get(
+        "APMDM_INSERTION_PAID_CAPACITY_AUTHORIZATION"
+    )
     content = {
         "schema_version": SCHEMA_VERSION,
         "experiment": "Sudoku monotone generation ladder",
@@ -141,6 +144,8 @@ def build_insertion_manifest(
                     "tests/test_insertion.py",
                     "tests/test_insertion_trainer.py",
                     "SUDOKU_MONOTONE_LADDER_20260808.md",
+                    "SUDOKU_MONOTONE_RUNPOD_R0_20260808.md",
+                    "ops/run_insertion_r0_runpod.sh",
                 )
                 if (repo_root() / name).exists()
             },
@@ -183,8 +188,16 @@ def build_insertion_manifest(
         "environment": environment_provenance(),
         "run_dir": str(run_dir.resolve()),
         "compute": {
-            "paid_capacity": "forbidden until separate explicit owner authorization",
-            "initial_execution": "local A10 only after the active AP-MDM run releases it",
+            "paid_capacity": (
+                paid_authorization
+                if paid_authorization
+                else "forbidden until separate explicit owner authorization"
+            ),
+            "initial_execution": (
+                "parallel RunPod A40 R0 smoke after explicit owner authorization"
+                if paid_authorization
+                else "local A10 only after the active AP-MDM run releases it"
+            ),
         },
     }
     digest = sha256_json(content)

@@ -1,8 +1,9 @@
 # Sudoku monotone generation ladder
 
 Date: 2026-08-08. Status: implementation complete; focused CPU tests pass;
-GPU throughput gates pending release of an approved A10. This document does
-not authorize new paid capacity.
+GPU throughput gates pending. This document by itself does not authorize new
+paid capacity. The owner's later authorization and its deliberately bounded R0
+execution contract are recorded in `SUDOKU_MONOTONE_RUNPOD_R0_20260808.md`.
 
 ## Question
 
@@ -119,4 +120,3 @@ cache remains on disk/CPU, batches are collated into CPU tensors, and Lightning
 copies each batch to the GPU. Forward, loss, backward, and optimizer work are
 GPU operations. That transfer is a few megabytes per batch and was not the
 observed bottleneck; the released epoch-boundary loader replacement was.
-
