@@ -146,7 +146,9 @@ def build_insertion_manifest(
                     "tests/test_insertion_trainer.py",
                     "SUDOKU_MONOTONE_LADDER_20260808.md",
                     "SUDOKU_MONOTONE_RUNPOD_R0_20260808.md",
+                    "SUDOKU_MONOTONE_RUNPOD_R1_20260808.md",
                     "ops/run_insertion_r0_runpod.sh",
+                    "ops/run_insertion_r1_runpod.sh",
                 )
                 if (repo_root() / name).exists()
             },
