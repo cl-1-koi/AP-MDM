@@ -1,8 +1,17 @@
 import typing
 import math
 
-import flash_attn
-import flash_attn.layers.rotary
+try:
+    import flash_attn
+    import flash_attn.layers.rotary
+    FLASH_ATTN_AVAILABLE = True
+except (ImportError, OSError):
+    # The released environment assumes a FlashAttention wheel.  Torch 2.7 /
+    # CUDA 12.8 on the target A10 has no compatible wheel, so retain the
+    # released tensor/module structure and use PyTorch SDPA as a kernel-only
+    # compatibility fallback.
+    flash_attn = None
+    FLASH_ATTN_AVAILABLE = False
 import huggingface_hub
 import omegaconf
 import torch
@@ -112,7 +121,18 @@ def rotate_half(x):
 def apply_rotary_pos_emb(qkv, cos, sin):
     cos = cos[0,:,0,0,:cos.shape[-1]//2]
     sin = sin[0,:,0,0,:sin.shape[-1]//2]
-    return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
+    if FLASH_ATTN_AVAILABLE:
+        return flash_attn.layers.rotary.apply_rotary_emb_qkv_(qkv, cos, sin)
+
+    # flash_attn's packed-QKV helper rotates Q and K, but leaves V unchanged.
+    # Its rotate-half convention consumes half-width cos/sin tables and repeats
+    # them over the full head dimension.
+    cos = torch.cat((cos, cos), dim=-1)[None, :, None, :].to(qkv.dtype)
+    sin = torch.cat((sin, sin), dim=-1)[None, :, None, :].to(qkv.dtype)
+    q, k, v = qkv.unbind(dim=2)
+    q = q * cos + rotate_half(q) * sin
+    k = k * cos + rotate_half(k) * sin
+    return torch.stack((q, k, v), dim=2)
 
 
 # function overload
@@ -253,17 +273,26 @@ class DDiTBlock(nn.Module):
             cos, sin = rotary_cos_sin
             qkv = apply_rotary_pos_emb(
                 qkv, cos.to(qkv.dtype), sin.to(qkv.dtype))
-        qkv = rearrange(qkv, 'b s ... -> (b s) ...')
-        if seqlens is None:
-            cu_seqlens = torch.arange(
-                0, (batch_size + 1) * seq_len, step=seq_len,
-                dtype=torch.int32, device=qkv.device)
+        if FLASH_ATTN_AVAILABLE:
+            qkv = rearrange(qkv, 'b s ... -> (b s) ...')
+            if seqlens is None:
+                cu_seqlens = torch.arange(
+                    0, (batch_size + 1) * seq_len, step=seq_len,
+                    dtype=torch.int32, device=qkv.device)
+            else:
+                cu_seqlens = seqlens.cumsum(-1)
+            x = flash_attn.flash_attn_interface.flash_attn_varlen_qkvpacked_func(
+                qkv, cu_seqlens, seq_len, 0., causal=False)
+            x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
         else:
-            cu_seqlens = seqlens.cumsum(-1)
-        x = flash_attn.flash_attn_interface.flash_attn_varlen_qkvpacked_func(
-            qkv, cu_seqlens, seq_len, 0., causal=False)
-
-        x = rearrange(x, '(b s) h d -> b s (h d)', b=batch_size)
+            q, k, v = qkv.unbind(dim=2)
+            x = F.scaled_dot_product_attention(
+                q.transpose(1, 2),
+                k.transpose(1, 2),
+                v.transpose(1, 2),
+                dropout_p=0.0,
+                is_causal=False)
+            x = rearrange(x, 'b h s d -> b s (h d)')
 
         x = bias_dropout_scale_fn(self.attn_out(x),
                                                             None,

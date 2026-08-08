@@ -45,7 +45,10 @@ HASHED_SOURCES: List[str] = [
     "dataset/sudoku/sudoku_verifier.py",
     "train/configs/sudoku.yaml",
     "train/configs/sudoku_paper.yaml",
+    "train/apmdm_dataloader.py",
+    "train/dataloader.py",
     "train/diffusion.py",
+    "train/models/__init__.py",
     "train/models/dit.py",
     "repro/__init__.py",
     "repro/cli.py",
@@ -65,6 +68,7 @@ HASHED_SOURCES: List[str] = [
     "repro/trainer.py",
     "repro/trajectories.py",
     "repro/transition.py",
+    "repro/upstream_adapter.py",
     "repro/vocab.py",
 ]
 

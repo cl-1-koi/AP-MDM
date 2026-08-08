@@ -281,7 +281,11 @@ class ChunkedStreamingDataset(Dataset):
                     processed_chunk.append(processed)
             
             # Save chunk
-            chunk_file = f"chunk_{len(self.chunk_files)}.pkl"
+            # Train and validation share ``chunks_dir`` and are materialised
+            # sequentially.  The released name ``chunk_N.pkl`` let validation
+            # overwrite the first training chunks while both metadata files
+            # continued to reference them.
+            chunk_file = f"{self.mode}_chunk_{len(self.chunk_files)}.pkl"
             chunk_path = os.path.join(self.chunks_dir, chunk_file)
             with open(chunk_path, 'wb') as f:
                 pickle.dump(processed_chunk, f)

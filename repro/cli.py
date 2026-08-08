@@ -98,6 +98,15 @@ def cmd_authenticate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_upstream_report(args: argparse.Namespace) -> int:
+    """Authenticate the released backbone/configuration as a separate arm."""
+    from repro.upstream_adapter import architecture_report
+
+    report = architecture_report(args.vocab_cache)
+    _emit(report, args.out)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # generate
 # --------------------------------------------------------------------------
@@ -344,6 +353,101 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_upstream_evaluate(args: argparse.Namespace) -> int:
+    """Evaluate a released-Lightning checkpoint with conditional Sudoku input."""
+    import torch
+
+    from repro.hashing import sha256_file
+    from repro.upstream_adapter import (
+        UPSTREAM_COMMIT,
+        build_upstream_adapter,
+        load_lightning_checkpoint,
+    )
+
+    _set_data_root(args.data_root)
+    cfg = (
+        load_historical_config()
+        if args.config_name == "sudoku"
+        else load_paper_config()
+    )
+    train = data_mod.load_split("train")
+    test = data_mod.load_split("test")
+    overlap = data_mod.measure_overlap(train, test)
+    data_mod.assert_no_leakage(overlap)
+
+    device = torch.device(
+        args.device
+        if (args.device != "cuda" or torch.cuda.is_available())
+        else "cpu"
+    )
+    model = build_upstream_adapter(
+        args.config_name,
+        args.vocab_cache,
+        seed=cfg.seed,
+        device=device,
+    )
+    payload = load_lightning_checkpoint(model, args.checkpoint, map_location="cpu")
+    model.to(device).eval()
+
+    sampler_cfg = SamplerConfig(
+        tau_remask=cfg.remasking_threshold,
+        tau_insert=cfg.expansion_threshold,
+        tau_delete=cfg.contraction_threshold,
+        max_steps=args.max_steps,
+    )
+    n = min(args.limit or test.n, test.n)
+    rows = []
+    started = time.time()
+    autocast = torch.bfloat16 if (device.type == "cuda" and args.bf16) else None
+    for start in range(0, n, args.batch_size):
+        indices = list(range(start, min(start + args.batch_size, n)))
+        states0 = data_mod.encode_puzzle_states(np.asarray(test.puzzles[indices]))
+        result = sample_generate(
+            model,
+            states0,
+            sampler_cfg,
+            device=device,
+            autocast_dtype=autocast,
+            progress_every=args.progress_every,
+        )
+        rows.extend(
+            evaluate_states(
+                indices, test.puzzles, test.solutions, result.states, result.traces
+            )
+        )
+        print(f"  evaluated {len(rows)}/{n} puzzles", flush=True)
+
+    checkpoint = Path(args.checkpoint).expanduser().resolve()
+    step = int(payload.get("global_step", -1))
+    tag = args.eval_tag or f"upstream-{args.config_name}-step{step}"
+    rows_path = eval_dir(create=True) / f"rows_{tag}.jsonl"
+    rows_sha = write_rows(rows_path, rows)
+    summary_doc = {
+        "backend": "released AP-MDM training stack + conditional adapter",
+        "upstream_commit": UPSTREAM_COMMIT,
+        "config_name": args.config_name,
+        "architecture_signature": model.architecture_signature(),
+        "checkpoint": str(checkpoint),
+        "checkpoint_sha256": sha256_file(checkpoint),
+        "checkpoint_step": step,
+        "vocab_cache": str(Path(args.vocab_cache).expanduser().resolve()),
+        "vocab_cache_sha256": sha256_file(Path(args.vocab_cache).expanduser().resolve()),
+        "rows_path": str(rows_path),
+        "rows_file_sha256": rows_sha,
+        "n_evaluated": len(rows),
+        "n_available": test.n,
+        "wall_seconds": time.time() - started,
+        "sampler": sampler_cfg.as_dict(),
+        "aggregate": aggregate(rows),
+    }
+    summary_doc["summary_sha256"] = sha256_json(summary_doc)
+    (eval_dir(create=True) / f"summary_{tag}.json").write_text(
+        json.dumps(summary_doc, indent=2, sort_keys=True)
+    )
+    _emit(summary_doc, args.out)
+    return 0
+
+
 # --------------------------------------------------------------------------
 # preflight / smoke
 # --------------------------------------------------------------------------
@@ -488,6 +592,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_authenticate)
 
+    p = sub.add_parser(
+        "upstream-report",
+        help="report the released architectures with their effective vocabulary",
+    )
+    p.add_argument("--vocab-cache", required=True)
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_upstream_report)
+
     p = sub.add_parser("generate", help="generate and validate solver transitions")
     p.add_argument("--tag", default=DEFAULT_TAG)
     p.add_argument("--limit", type=int, default=None)
@@ -533,6 +645,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--progress-every", type=int, default=0)
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_evaluate)
+
+    p = sub.add_parser(
+        "upstream-evaluate",
+        help="conditionally evaluate a checkpoint produced by the released trainer",
+    )
+    p.add_argument("--checkpoint", required=True)
+    p.add_argument("--config-name", choices=("sudoku", "sudoku_paper"), required=True)
+    p.add_argument("--vocab-cache", required=True)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--batch-size", type=int, default=256)
+    p.add_argument("--max-steps", type=int, default=65536)
+    p.add_argument("--device", default="cuda")
+    p.add_argument("--bf16", action="store_true")
+    p.add_argument("--eval-tag", default=None)
+    p.add_argument("--progress-every", type=int, default=0)
+    p.add_argument("--out", default=None)
+    p.set_defaults(func=cmd_upstream_evaluate)
 
     p = sub.add_parser("benchmark", help="measure throughput for the cost projection")
     p.add_argument("--device", default="cuda")

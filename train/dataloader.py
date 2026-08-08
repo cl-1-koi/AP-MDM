@@ -401,6 +401,7 @@ def get_dataset(
         dataset = apmdm_dataloader.APMDMDataset(
             data_path=data_path,
             tokenizer=tokenizer_obj,
+            vocab_cache_path=vocab_file,
             mode=mode,
             train_ratio=train_ratio,
             streaming=streaming,
