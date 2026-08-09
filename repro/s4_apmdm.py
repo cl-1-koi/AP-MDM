@@ -41,7 +41,10 @@ MASK = BASE_VOCAB
 BOS = BASE_VOCAB + 1
 PAD = BASE_VOCAB + 2
 VOCAB_SIZE = BASE_VOCAB + 3
-MAX_OUTPUT_LENGTH = 1 + CELLS + 8
+# A corruption contains BOS, every non-omitted target, and independently up to
+# one inserted extra after each target.  The random process does not cap extras
+# at eight, so the model bound must cover its true (rare) maximum.
+MAX_OUTPUT_LENGTH = 1 + 2 * CELLS
 MAX_PACKED_LENGTH = CONDITION_LENGTH + MAX_OUTPUT_LENGTH
 
 

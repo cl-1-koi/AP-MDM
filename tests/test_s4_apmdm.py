@@ -7,6 +7,7 @@ import torch
 from repro.model import APMDMEncoder
 from repro.s4_apmdm import (
     CONDITION_LENGTH,
+    MAX_OUTPUT_LENGTH,
     apmdm_loss,
     conditions,
     corrupt_targets,
@@ -37,6 +38,13 @@ def test_corruption_batch_exercises_all_four_operations():
     assert int(batch.delete.sum()) > 0
     assert torch.all(batch.attention_mask[:, :CONDITION_LENGTH])
     assert not torch.any(batch.loss_mask[:, :CONDITION_LENGTH])
+
+
+def test_model_length_covers_maximum_possible_corruption():
+    # BOS + every target + one independently sampled extra after every target.
+    assert MAX_OUTPUT_LENGTH == 1 + 2 * CELLS
+    spec = model_spec(width=32, blocks=1, heads=4)
+    assert spec.length == CONDITION_LENGTH + MAX_OUTPUT_LENGTH
 
 
 def test_apmdm_loss_reaches_every_operation_head():
