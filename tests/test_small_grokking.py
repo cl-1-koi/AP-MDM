@@ -14,6 +14,8 @@ from repro.small_grokking import (
     S4Posterior,
     all_solutions,
     count_solutions,
+    counterfactual_payloads,
+    diagnostic_panel,
     encode_state,
     fo_ao_loss,
     frozen_splits,
@@ -75,3 +77,29 @@ def test_learning_order_loss_reaches_policy_and_posterior():
     assert policy.digit_head.weight.grad is not None
     assert posterior.head.weight.grad is not None
 
+
+def test_counterfactual_payloads_change_every_digit():
+    train, _, _ = frozen_splits(42)
+    payloads = counterfactual_payloads(train.solutions, 19)
+    assert payloads.shape == train.solutions.shape
+    assert np.all(payloads != train.solutions)
+    assert int(payloads.min()) == 1
+    assert int(payloads.max()) == 4
+
+
+def test_diagnostic_panel_emits_all_declared_mechanism_metrics():
+    train, _, _ = frozen_splits(42)
+    split = type(train)(train.puzzles[:4], train.solutions[:4])
+    policy = S4Policy(model_spec(width=32, blocks=1, heads=4))
+    panel = diagnostic_panel(
+        policy, split, device=torch.device("cpu"), seed=23, bf16=False
+    )
+    assert set(panel) == {
+        "keyed_solution",
+        "unkeyed_shuffled_solution",
+        "no_hint",
+        "keyed_counterfactual",
+        "key_ablation_delta",
+        "hint_ablation_delta",
+    }
+    assert panel["keyed_counterfactual"]["blank_cells"] > 0

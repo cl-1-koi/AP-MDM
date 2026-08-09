@@ -488,6 +488,133 @@ def is_valid(grid: np.ndarray) -> bool:
     return True
 
 
+def counterfactual_payloads(solutions: np.ndarray, seed: int) -> np.ndarray:
+    """Change every payload digit by a seeded nonzero offset modulo four."""
+    generator = np.random.default_rng(seed)
+    offsets = generator.integers(1, SIZE, size=solutions.shape, dtype=np.uint8)
+    payloads = (
+        (solutions.astype(np.uint16) - 1 + offsets) % SIZE + 1
+    ).astype(np.uint8)
+    if bool((payloads == solutions).any()):
+        raise AssertionError("counterfactual construction left an unchanged digit")
+    return payloads
+
+
+@torch.no_grad()
+def payload_metrics(
+    policy: S4Policy,
+    split: S4Split,
+    payloads: np.ndarray,
+    *,
+    device: torch.device,
+    seed: int,
+    bf16: bool,
+    keyed: bool = True,
+    include_hints: bool = True,
+) -> dict[str, Any]:
+    """Measure one-forward following of visible payloads on blank cells."""
+    if payloads.shape != split.solutions.shape:
+        raise ValueError("payloads must match split solutions")
+    puzzles = torch.as_tensor(
+        np.array(split.puzzles, copy=True), dtype=torch.long, device=device
+    )
+    solutions = torch.as_tensor(
+        np.array(split.solutions, copy=True), dtype=torch.long, device=device
+    )
+    payload = torch.as_tensor(
+        np.array(payloads, copy=True), dtype=torch.long, device=device
+    )
+    generator = torch.Generator(device=device).manual_seed(seed)
+    hints = _hint_order(split.n, device, generator)
+    context = (
+        torch.autocast("cuda", dtype=torch.bfloat16)
+        if device.type == "cuda" and bf16
+        else nullcontext()
+    )
+    policy.eval()
+    with context:
+        prediction = policy(
+            encode_state(
+                puzzles,
+                payload,
+                hints,
+                keyed=keyed,
+                include_hints=include_hints,
+            )
+        )["digit_logits"].argmax(-1) + 1
+    blank = puzzles.reshape(split.n, CELLS) == 0
+    flat_payload = payload.reshape(split.n, CELLS)
+    flat_solution = solutions.reshape(split.n, CELLS)
+    payload_counts = ((prediction == flat_payload) & blank).sum(-1)
+    solution_counts = ((prediction == flat_solution) & blank).sum(-1)
+    blank_counts = blank.sum(-1)
+    blank_total = int(blank_counts.sum())
+    return {
+        "n": split.n,
+        "blank_cells": blank_total,
+        "payload_accuracy": float(payload_counts.sum() / blank_total),
+        "solution_accuracy": float(solution_counts.sum() / blank_total),
+        "payload_exact": int((payload_counts == blank_counts).sum()),
+        "payload_exact_rate": float((payload_counts == blank_counts).float().mean()),
+        "solution_exact": int((solution_counts == blank_counts).sum()),
+        "solution_exact_rate": float((solution_counts == blank_counts).float().mean()),
+        "keyed": keyed,
+        "include_hints": include_hints,
+        "shuffle_seed": seed,
+    }
+
+
+@torch.no_grad()
+def diagnostic_panel(
+    policy: S4Policy,
+    split: S4Split,
+    *,
+    device: torch.device,
+    seed: int,
+    bf16: bool,
+) -> dict[str, Any]:
+    """Run the shared keyed, ablation, and counterfactual mechanism panel."""
+    normal = payload_metrics(
+        policy, split, split.solutions, device=device, seed=seed, bf16=bf16
+    )
+    unkeyed = payload_metrics(
+        policy,
+        split,
+        split.solutions,
+        device=device,
+        seed=seed,
+        bf16=bf16,
+        keyed=False,
+    )
+    no_hint = payload_metrics(
+        policy,
+        split,
+        split.solutions,
+        device=device,
+        seed=seed,
+        bf16=bf16,
+        include_hints=False,
+    )
+    counterfactual = payload_metrics(
+        policy,
+        split,
+        counterfactual_payloads(split.solutions, seed + 1),
+        device=device,
+        seed=seed,
+        bf16=bf16,
+    )
+    return {
+        "keyed_solution": normal,
+        "unkeyed_shuffled_solution": unkeyed,
+        "no_hint": no_hint,
+        "keyed_counterfactual": counterfactual,
+        "key_ablation_delta": normal["solution_accuracy"]
+        - unkeyed["solution_accuracy"],
+        "hint_ablation_delta": normal["solution_accuracy"]
+        - no_hint["solution_accuracy"],
+    }
+
+
 @torch.no_grad()
 def evaluate_split(
     policy: S4Policy,
@@ -725,11 +852,32 @@ def run(settings: Settings) -> dict[str, Any]:
                         seed=settings.seed + step + (0 if split_name == "train" else 100_000),
                         bf16=settings.bf16,
                     )
+                    diagnostic_seed = settings.seed + step + (
+                        0 if split_name == "train" else 100_000
+                    )
+                    diagnostics = diagnostic_panel(
+                        policy,
+                        split,
+                        device=device,
+                        seed=diagnostic_seed,
+                        bf16=settings.bf16,
+                    )
                     rows_path = output / f"eval_{split_name}_rows_step_{step:09d}.jsonl"
                     _write_rows(rows_path, rows)
+                    diagnostics_path = (
+                        output / f"diagnostics_{split_name}_step_{step:09d}.json"
+                    )
+                    _write_json(diagnostics_path, diagnostics)
                     event = {
                         "step": step, "split": split_name, **aggregate,
                         "rows_path": str(rows_path), "rows_sha256": _sha(rows_path),
+                        "diagnostics_path": str(diagnostics_path),
+                        "diagnostics_sha256": _sha(diagnostics_path),
+                        "payload_accuracy": diagnostics["keyed_solution"]["payload_accuracy"],
+                        "counterfactual_payload_accuracy": diagnostics["keyed_counterfactual"]["payload_accuracy"],
+                        "counterfactual_solution_accuracy": diagnostics["keyed_counterfactual"]["solution_accuracy"],
+                        "key_ablation_delta": diagnostics["key_ablation_delta"],
+                        "hint_ablation_delta": diagnostics["hint_ablation_delta"],
                     }
                     telemetry.write("eval", **event)
                     evaluations.append(event)
@@ -810,4 +958,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
