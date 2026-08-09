@@ -102,6 +102,18 @@ Train past interpolation with logarithmic evaluations and checkpoints at
 A grokking event requires a delayed held-out or counterfactual jump after
 training interpolation. Loss reduction alone is not a pass.
 
+The exact-source `eea5198` L40S benchmark measured about 81 updates/s for
+FO-ARM, 84 updates/s for AO-ARM, and 32 updates/s for LO-ARM at batch 256.
+All three used less than 0.4 GB peak allocated CUDA memory. At update 1,000,
+held-out rollout exact rates were 11.72%, 2.34%, and 13.28% respectively, but
+counterfactual payload accuracy was only 21.09%, 16.02%, and 11.64% (chance is
+25% for a wholly unrelated four-way label; the altered payload is guaranteed
+to differ from the original). LO-ARM already predicted the original training
+solution on 97.66% of counterfactual blank cells while following the changed
+payload on only 1.25%. The panel is therefore healthy and has entered the
+declared memorization-before-generalization regime; these are not grokking
+passes.
+
 ## S6: 6x6 Sudoku rule generalization
 
 Use 2x3 boxes and disjoint completed-grid splits large enough to prevent the
