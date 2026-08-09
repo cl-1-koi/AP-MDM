@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -47,7 +48,7 @@ class Workload:
         return self.local_output / "data" / "runs" / self.run_id
 
 
-WORKLOADS = (
+ALIGNED_WORKLOADS = (
     Workload(
         condition_mode="aligned_solution_hint",
         pod_id="82i4fwoch34p40",
@@ -60,6 +61,22 @@ WORKLOADS = (
         local_parent="/home/ubuntu/apmdm-official-data/sudoku-vc1/aligned",
         queued_next_experiment="keyed shuffled-answer control, then visible-answer star length scaling",
         retain_rationale="retain high-value 32-vCPU L40S for declared keyed-reordering follow-up",
+    ),
+)
+
+KEYED_WORKLOADS = (
+    Workload(
+        condition_mode="keyed_shuffled_solution_hint",
+        pod_id="82i4fwoch34p40",
+        host="64.247.206.218",
+        port=11960,
+        hourly_cost_usd=0.99,
+        tmux_session="vc1_keyed_full",
+        remote_output="/workspace/artifacts/sudoku-vc1/full-keyed-f992c50-s42",
+        run_id="vc1-keyed_shuffled_solution_hint-s42-u78100",
+        local_parent="/home/ubuntu/apmdm-official-data/sudoku-vc1/keyed",
+        queued_next_experiment="visible-answer star length scaling",
+        retain_rationale="retain 32-vCPU L40S for the declared visibility/length follow-up",
     ),
 )
 
@@ -241,13 +258,15 @@ def poll(workload: Workload) -> dict[str, Any]:
     }
 
 
-def poll_once() -> dict[str, Any]:
+def poll_once(workloads: tuple[Workload, ...]) -> dict[str, Any]:
     snapshot = {
         "schema": "apmdm/sudoku-vc1-supervisor-v1",
         "checked_utc": utc_now(),
-        "hourly_burn_usd": sum(workload.hourly_cost_usd for workload in WORKLOADS),
+        "hourly_burn_usd": sum(
+            {workload.pod_id: workload.hourly_cost_usd for workload in workloads}.values()
+        ),
         "inventory": active_inventory(),
-        "workloads": [poll(workload) for workload in WORKLOADS],
+        "workloads": [poll(workload) for workload in workloads],
     }
     atomic_json(STATUS_ROOT / "status.json", snapshot)
     STATUS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -259,8 +278,12 @@ def poll_once() -> dict[str, Any]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", choices=("aligned", "keyed"), default="aligned")
+    args = parser.parse_args()
+    workloads = ALIGNED_WORKLOADS if args.phase == "aligned" else KEYED_WORKLOADS
     while True:
-        print(json.dumps(poll_once(), sort_keys=True), flush=True)
+        print(json.dumps(poll_once(workloads), sort_keys=True), flush=True)
         time.sleep(300)
 
 
