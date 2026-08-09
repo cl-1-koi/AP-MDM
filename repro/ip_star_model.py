@@ -346,7 +346,10 @@ def _exact_next_value(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     partial, partial_mask = _compress_targets(batch.targets, batch.target_mask, selected)
     output = decoder(batch, partial, partial_mask)
-    location_log_probability = F.log_softmax(output.location_logits, dim=-1)
+    # Keep Transformer matmuls in BF16, but perform probability arithmetic in
+    # FP32. Besides being numerically safer, this keeps diagnostics and indexed
+    # assignments dtype-consistent under autocast.
+    location_log_probability = F.log_softmax(output.location_logits.float(), dim=-1)
     term = prefix_lengths == batch.lengths
     value = location_log_probability[:, -1].clone()
     q_entropy = q_logits.new_zeros(q_logits.shape[0])
@@ -367,7 +370,7 @@ def _exact_next_value(
         slot_index = selected[active].long().cumsum(dim=-1) - selected[active].long()
         location = location_log_probability[active, :-1].gather(1, slot_index)
         content_log_probability = F.log_softmax(
-            output.content_logits[active, :, :NODE_VOCAB_SIZE], dim=-1
+            output.content_logits[active, :, :NODE_VOCAB_SIZE].float(), dim=-1
         )
         row_index = torch.arange(slot_index.shape[0], device=slot_index.device)[:, None]
         content = content_log_probability[
@@ -402,7 +405,7 @@ def learned_ip_objective(
     batch: StarBatch,
     generator: torch.Generator,
 ) -> ObjectiveOutput:
-    q_logits = posterior(batch)
+    q_logits = posterior(batch).float()
     orders = _sample_orders(q_logits, batch.target_mask, 2, generator)
     prefix_lengths = _sample_prefix_lengths(batch.lengths, generator)
     prefix_logs = []
@@ -441,7 +444,7 @@ def random_ip_objective(
     batch: StarBatch,
     generator: torch.Generator,
 ) -> ObjectiveOutput:
-    q_logits = torch.zeros_like(batch.targets, dtype=decoder.content_head.weight.dtype)
+    q_logits = torch.zeros_like(batch.targets, dtype=torch.float32)
     q_logits = q_logits.masked_fill(~batch.target_mask, -torch.inf)
     orders = _sample_orders(q_logits, batch.target_mask, 2, generator)
     prefix_lengths = _sample_prefix_lengths(batch.lengths, generator)
@@ -479,7 +482,7 @@ def fixed_order_objective(
     output = decoder(batch, partial, partial_mask)
     row = torch.arange(batch.targets.shape[0], device=batch.targets.device)
     next_slot = prefix_lengths
-    content = output.content_logits[row, next_slot]
+    content = output.content_logits[row, next_slot].float()
     allowed = torch.cat((content[:, :NODE_VOCAB_SIZE], content[:, EOS_ID : EOS_ID + 1]), dim=-1)
     target = torch.where(
         prefix_lengths == batch.lengths,
