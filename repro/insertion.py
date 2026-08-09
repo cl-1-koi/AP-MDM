@@ -42,8 +42,12 @@ from repro.model import DDiTBlock, EmbeddingLayer, LayerNorm, Rotary, TimestepEm
 
 InsertionArm = Literal["fixed_ar", "random_insertion", "learned_insertion"]
 VALID_ARMS = frozenset(("fixed_ar", "random_insertion", "learned_insertion"))
-ConditionMode = Literal["puzzle_only", "transposed_solution_hint"]
-VALID_CONDITION_MODES = frozenset(("puzzle_only", "transposed_solution_hint"))
+ConditionMode = Literal[
+    "puzzle_only", "aligned_solution_hint", "transposed_solution_hint"
+]
+VALID_CONDITION_MODES = frozenset(
+    ("puzzle_only", "aligned_solution_hint", "transposed_solution_hint")
+)
 
 
 def validate_arm(arm: str) -> InsertionArm:
@@ -278,7 +282,10 @@ def _partial_states(
     solved = solutions.reshape(batch, vocab.NUM_CELLS)
     values[prefix] = solved[prefix]
     hints = None
-    if validate_condition_mode(condition_mode) == "transposed_solution_hint":
+    mode = validate_condition_mode(condition_mode)
+    if mode == "aligned_solution_hint":
+        hints = solutions
+    elif mode == "transposed_solution_hint":
         hints = solutions.transpose(-2, -1)
     return encode_partial_grids(values.reshape(batch, 9, 9), hints)
 
@@ -513,15 +520,18 @@ def solve_monotone(
     grids = torch.as_tensor(arr, dtype=torch.long, device=device).clone()
     mode = validate_condition_mode(condition_mode)
     hint_tensor = None
-    if mode == "transposed_solution_hint":
+    if mode in ("aligned_solution_hint", "transposed_solution_hint"):
         if solutions is None:
-            raise ValueError("transposed_solution_hint requires oracle solutions")
+            raise ValueError(f"{mode} requires oracle solutions")
         solution_array = np.array(solutions, dtype=np.uint8, copy=True)
         if solution_array.shape != arr.shape:
             raise ValueError("oracle solutions must match the puzzle batch shape")
-        hint_tensor = torch.as_tensor(
-            solution_array.transpose(0, 2, 1), dtype=torch.long, device=device
+        hint_values = (
+            solution_array
+            if mode == "aligned_solution_hint"
+            else solution_array.transpose(0, 2, 1)
         )
+        hint_tensor = torch.as_tensor(hint_values, dtype=torch.long, device=device)
     generator = torch.Generator(device=device).manual_seed(int(seed))
     steps = torch.zeros(grids.shape[0], dtype=torch.long, device=device)
     policy.eval()

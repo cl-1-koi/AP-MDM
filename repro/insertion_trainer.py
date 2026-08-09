@@ -112,7 +112,9 @@ def build_insertion_manifest(
             "termination": "deterministic when all 81 cells are filled",
             "condition_mode": settings.condition_mode,
             "oracle_information": (
-                "the complete solution is exposed through COLOR_1..COLOR_9 on the transposed board; this is an intentional retrieval/reordering control"
+                "the complete solution is exposed through COLOR_1..COLOR_9 at the same cell; this is an intentional local visible-information control"
+                if settings.condition_mode == "aligned_solution_hint"
+                else "the complete solution is exposed through COLOR_1..COLOR_9 on the transposed board; this is an intentional retrieval/reordering control"
                 if settings.condition_mode == "transposed_solution_hint"
                 else None
             ),

@@ -75,3 +75,26 @@ scheduled checkpoint retained by the run contract, evaluation rows and hashes,
 train summary, console log, source/deployment record, completion/failure record,
 and a remote/local byte-for-byte hash audit. No pod may be released before its
 arm passes closure.
+
+## VC-1a result and control correction
+
+Both declared arms completed 78,100 updates and passed byte-for-byte artifact
+closure. Both reached 100% teacher-forced training digit accuracy but 0/256
+held-out exact/valid solves. On blank held-out cells, puzzle-only accuracy was
+20.73% and the transposed-hint arm was 21.21%; mean errors were approximately
+45 of 57 blanks per puzzle. This is not exact-match compounding.
+
+The transposed control was invalid for the intended visible-component test.
+The spatial DDiT uses 1-D relative RoPE without absolute row/column identity.
+Mapping `(r,c)` to `(c,r)` is position-dependent rather than translation
+equivariant, and the hint carries no content key linking its source and target
+cells. In contrast, star-graph nodes carry shared node-ID tokens that act as
+keys independent of sequence position.
+
+VC-1b therefore adds `aligned_solution_hint`: the disjointly encoded answer is
+placed in the color slot of the same cell, at a constant relative offset from
+the digit-prediction position. This isolates whether the network can exploit
+visible answer information at all. A successful aligned arm would leave keyed
+reordering—not visibility—as the next mechanism to isolate. Failure after the
+full matched budget would instead show that the policy/objective ignores even a
+locally available oracle channel.

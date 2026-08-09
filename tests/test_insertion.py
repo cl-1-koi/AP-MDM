@@ -79,6 +79,13 @@ def test_transposed_solution_hint_exposes_relabelled_digits_at_other_cells():
     assert int(colors[0, 4, 1]) == vocab.COLOR_MIN + int(solutions[0, 1, 4]) - 1
 
 
+def test_aligned_solution_hint_exposes_relabelled_digit_at_constant_offset():
+    puzzles, solutions = batch_pair(1)
+    encoded = encode_partial_grids(puzzles, solutions)
+    colors = encoded[:, 1::4].reshape(1, 9, 9)
+    assert torch.equal(colors, vocab.COLOR_MIN + solutions - 1)
+
+
 @pytest.mark.parametrize("arm", ["fixed_ar", "random_insertion"])
 def test_nonlearned_order_loss_is_finite_and_trains_digit_head(arm):
     puzzles, solutions = batch_pair()

@@ -795,7 +795,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--keep-last-checkpoints", type=int, default=3)
     p.add_argument(
         "--condition-mode",
-        choices=("puzzle_only", "transposed_solution_hint"),
+        choices=(
+            "puzzle_only",
+            "aligned_solution_hint",
+            "transposed_solution_hint",
+        ),
         default="puzzle_only",
     )
     p.add_argument("--force", action="store_true")
