@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,9 +19,20 @@ from repro import vocab
 from repro.config import ModelSpec
 from repro.hashing import sha256_file
 from repro.insertion import SudokuInsertionPolicy, encode_partial_grids, solve_monotone
+from repro.paths import repo_root
 
 
 SCHEMA = "apmdm/keyed-diagnostics-v1"
+
+
+def _git(*args: str) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(repo_root()), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def _autocast(device: torch.device, enabled: bool):
@@ -215,6 +227,11 @@ def run_diagnostics(
     result = {
         "schema": SCHEMA,
         "created_utc": datetime.now(timezone.utc).isoformat(),
+        "diagnostic_code": {
+            "commit": _git("rev-parse", "HEAD"),
+            "dirty": bool(_git("status", "--porcelain") or ""),
+            "source_sha256": sha256_file(Path(__file__)),
+        },
         "checkpoint": {
             "path": str(checkpoint_path.resolve()),
             "sha256": sha256_file(checkpoint_path),
@@ -265,4 +282,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
