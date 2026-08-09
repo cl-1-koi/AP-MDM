@@ -15,16 +15,24 @@ remasking, replacement, deletion, MCTS, or solver transitions.
 
 ## Upstream availability audit
 
-- No public implementation or checkpoint was linked from arXiv v1, v2, or v3.
-- No implementation was found in the public repositories of the first author
-  or coauthors, or by GitHub repository/code search on 2026-08-09.
+- No public implementation or checkpoint for Zhang et al.'s IP method was
+  linked from arXiv v1, v2, or v3, and none was found in the authors' public
+  repositories on 2026-08-09.
+- The cited predecessor task repository was subsequently located at
+  `https://github.com/dhruvdcoder/ILM` (audited commit
+  `6cc27f104fd926c8256aff28682c3fe66050ce77`). It releases the exact hard
+  star-graph generator and a `vstar_medium_v2` configuration whose 50,000 /
+  100 / 5,000 train/validation/test counts and graph dimensions match the new
+  paper. We adapt and attribute that generator, while reconstructing the new
+  IP model and objective from Zhang et al.'s equations.
 - The standard GuacaMol dataset and evaluator are public, but the paper omits
   the decoder width, attention-head count, batch size, tokenizer details,
   maximum sequence length, training steps/epochs, random seeds, and hardware.
   It only specifies 18 decoder layers, three posterior layers, optimizer/LRs,
   weight decay, EMA, cosine scheduling, and that training ran "to convergence."
-- The planning appendix specifies more of the model and optimizer but omits
-  total dataset sizes and seeds.
+- Neither paper nor predecessor code freezes generated split seeds or hashes,
+  so this reproduction declares and hashes its own deterministic splits before
+  training.
 
 Consequently, results must be called a reconstruction, not an exact upstream
 reproduction, unless the authors provide the missing configuration.
@@ -41,8 +49,9 @@ enumerated. Before training a Transformer, verify:
 3. the closed-form expectation over the next index matches enumeration;
 4. the two-sample RLOO automatic-differentiation surrogate matches an
    independently enumerated expected gradient within a declared tolerance;
-5. policy-based and classifier-based termination produce normalized sampling
-   distributions and halt correctly.
+5. the policy-based termination distribution used by G1 is normalized and its
+   search-free decoder halts correctly. Classifier-based termination is a
+   separate paper variant and is deferred unless G1 requires it.
 
 No GPU training arm may pass G0 on loss reduction alone.
 
@@ -59,8 +68,8 @@ Use the paper-declared planning architecture and optimizer:
 - AdamW at 1e-4, cosine decay with 1,000 warm-up steps;
 - EMA 0.999 after step 200; batch 64; 100 epochs.
 
-Because upstream dataset counts and seeds are missing, freeze our generator,
-split sizes, and seeds before observing results. Compare matched FO-ARM,
+Use the predecessor's released split sizes and freeze our generated split
+seeds and hashes before observing results. Compare matched FO-ARM,
 random-order AO-IP, and learned IP arms. The paper reports 24.0%, 26.5%, and
 83.0% sequence accuracy respectively, so this is a high-signal mechanistic
 gate. Report exact-match, token accuracy, Hamming distance, Levenshtein
