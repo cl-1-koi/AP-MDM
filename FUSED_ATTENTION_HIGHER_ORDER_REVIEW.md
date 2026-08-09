@@ -74,9 +74,13 @@ differentiable to arbitrary order.
 Scripts committed with this report (standalone; no training code touched):
 
 - `fused_attention_higher_order_probe.py` — backend × device × dtype matrix of
-  the exact IRED pattern at the S4 shape (batch 2, seq 80, width 64, 4 heads,
-  bool key-padding mask as in `repro/model.py`), plus a forced-math vs
-  explicit-attention agreement check.
+  the exact IRED pattern at the S4 shape (batch 2, seq 80, width 64, 4 heads),
+  tested both with and without the bool key-padding mask supported by
+  `repro/model.py`, plus a forced-math vs explicit-attention agreement check.
+  The current fixed-length `S4Energy` invocation does not pass a padding mask;
+  the no-mask rows are therefore its operational configuration. The masked
+  rows cover the same block's variable-length use and reach the same
+  higher-order-support verdict.
 - `fused_attention_higher_order_bench.py` — time/memory cost at batch 16.
 
 Commands:
@@ -87,7 +91,7 @@ python fused_attention_higher_order_probe.py --device cuda
 python fused_attention_higher_order_bench.py
 ```
 
-### 3.1 Observed: CUDA (A10, torch 2.7.0), fp32 + bool mask = the model's exact config
+### 3.1 Observed: CUDA (A10, torch 2.7.0), fp32 + bool mask
 
 | backend | 1st-order `∂E/∂x` | inner `create_graph` call | mixed `∂²E/∂x∂θ` | `∂²E/∂x²` |
 |---|---|---|---|---|
