@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 import pytest
 
@@ -63,6 +64,42 @@ def test_insertion_trainer_checkpoint_resume(tmp_path, paper_config, train_split
         second.close()
 
 
+def test_trainer_evaluates_non_cadence_terminal_step(
+    tmp_path, paper_config, train_split, test_split
+):
+    settings = InsertionTrainerSettings(
+        arm="random_insertion",
+        run_id="terminal-eval",
+        max_steps=3,
+        batch_size=2,
+        checkpoint_every=2,
+        log_every=1,
+        eval_every=2,
+        eval_limit=1,
+        device="cpu",
+        seed=7,
+        bf16=False,
+        condition_mode="transposed_solution_hint",
+    )
+    run_dir = tmp_path / "terminal-eval"
+    trainer = InsertionTrainer(
+        tiny_config(paper_config),
+        settings,
+        train_split,
+        test_split,
+        run_dir,
+        "sealed-terminal",
+    )
+    try:
+        trainer.train()
+    finally:
+        trainer.close()
+    records = [
+        json.loads(line) for line in (run_dir / "telemetry.jsonl").read_text().splitlines()
+    ]
+    assert [row["step"] for row in records if row["kind"] == "eval"] == [2, 3]
+
+
 def test_insertion_manifest_seal_detects_mutation(
     tmp_path, paper_config, train_split, test_split
 ):
@@ -91,6 +128,37 @@ def test_insertion_manifest_seal_detects_mutation(
     manifest["training"]["max_steps"] = 11
     with pytest.raises(RuntimeError, match="seal mismatch"):
         verify_insertion_manifest(manifest)
+
+
+def test_manifest_seals_oracle_hint_as_an_explicit_control(
+    tmp_path, paper_config, train_split, test_split
+):
+    config = tiny_config(paper_config)
+    settings = InsertionTrainerSettings(
+        arm="random_insertion",
+        run_id="oracle-control",
+        max_steps=10,
+        batch_size=2,
+        device="cpu",
+        bf16=False,
+        condition_mode="transposed_solution_hint",
+    )
+    policy = SudokuInsertionPolicy(effective_model_spec(config.model))
+    overlap = data_mod.measure_overlap(train_split, test_split)
+    manifest = build_insertion_manifest(
+        config=config,
+        settings=settings,
+        train=train_split,
+        test=test_split,
+        overlap=overlap.as_dict(),
+        policy=policy,
+        posterior=None,
+        run_dir=tmp_path / "oracle-control",
+    )
+    boundary = manifest["mechanism_boundary"]
+    assert boundary["condition_mode"] == "transposed_solution_hint"
+    assert "complete solution" in boundary["oracle_information"]
+    assert verify_insertion_manifest(manifest) == manifest["seal"]["manifest_sha256"]
 
 
 def test_insertion_manifest_records_explicit_paid_capacity_authorization(

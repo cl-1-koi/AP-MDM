@@ -42,6 +42,8 @@ from repro.model import DDiTBlock, EmbeddingLayer, LayerNorm, Rotary, TimestepEm
 
 InsertionArm = Literal["fixed_ar", "random_insertion", "learned_insertion"]
 VALID_ARMS = frozenset(("fixed_ar", "random_insertion", "learned_insertion"))
+ConditionMode = Literal["puzzle_only", "transposed_solution_hint"]
+VALID_CONDITION_MODES = frozenset(("puzzle_only", "transposed_solution_hint"))
 
 
 def validate_arm(arm: str) -> InsertionArm:
@@ -50,12 +52,22 @@ def validate_arm(arm: str) -> InsertionArm:
     return arm  # type: ignore[return-value]
 
 
+def validate_condition_mode(mode: str) -> ConditionMode:
+    if mode not in VALID_CONDITION_MODES:
+        raise ValueError(
+            f"unknown condition mode {mode!r}; expected one of {sorted(VALID_CONDITION_MODES)}"
+        )
+    return mode  # type: ignore[return-value]
+
+
 def effective_model_spec(spec: ModelSpec, vocab_size: int = 34) -> ModelSpec:
     """Return the released runtime shape (the tokenizer expands 31 to 34 ids)."""
     return replace(spec, vocab_size=int(vocab_size))
 
 
-def encode_partial_grids(grids: torch.Tensor) -> torch.Tensor:
+def encode_partial_grids(
+    grids: torch.Tensor, solution_hints: torch.Tensor | None = None
+) -> torch.Tensor:
     """Encode ``(B,9,9)`` partial grids as the released 324-token state."""
     if grids.ndim != 3 or tuple(grids.shape[1:]) != (9, 9):
         raise ValueError(f"expected (B,9,9), got {tuple(grids.shape)}")
@@ -69,7 +81,18 @@ def encode_partial_grids(grids: torch.Tensor) -> torch.Tensor:
     )
     flat = grids.reshape(batch, vocab.NUM_CELLS)
     tokens[:, 0::4] = flat
-    tokens[:, 1::4] = vocab.WHITE
+    if solution_hints is None:
+        tokens[:, 1::4] = vocab.WHITE
+    else:
+        if solution_hints.shape != grids.shape:
+            raise ValueError("solution hints must match the grid shape")
+        hints = solution_hints.long()
+        if bool(((hints < 1) | (hints > 9)).any()):
+            raise ValueError("solution hints must contain digits 1..9")
+        # COLOR_1..COLOR_9 are a disjoint encoding of visible oracle digits.
+        # The hint board is transposed by the caller, so the policy must both
+        # translate the token code and retrieve the digit from another cell.
+        tokens[:, 1::4] = vocab.COLOR_MIN + hints.reshape(batch, vocab.NUM_CELLS) - 1
     tokens[:, 2::4] = vocab.NORMAL
     tokens[:, 3::4] = vocab.SEPARATOR
     return tokens
@@ -245,13 +268,19 @@ def _prefix_mask(order: torch.Tensor, prefix_lengths: torch.Tensor) -> torch.Ten
 
 
 def _partial_states(
-    puzzles: torch.Tensor, solutions: torch.Tensor, prefix: torch.Tensor
+    puzzles: torch.Tensor,
+    solutions: torch.Tensor,
+    prefix: torch.Tensor,
+    condition_mode: ConditionMode = "puzzle_only",
 ) -> torch.Tensor:
     batch = puzzles.shape[0]
     values = puzzles.reshape(batch, vocab.NUM_CELLS).clone()
     solved = solutions.reshape(batch, vocab.NUM_CELLS)
     values[prefix] = solved[prefix]
-    return encode_partial_grids(values.reshape(batch, 9, 9))
+    hints = None
+    if validate_condition_mode(condition_mode) == "transposed_solution_hint":
+        hints = solutions.transpose(-2, -1)
+    return encode_partial_grids(values.reshape(batch, 9, 9), hints)
 
 
 @dataclass(frozen=True)
@@ -266,6 +295,7 @@ def fixed_or_random_loss(
     solutions: torch.Tensor,
     arm: InsertionArm,
     generator: torch.Generator,
+    condition_mode: ConditionMode = "puzzle_only",
 ) -> MonotoneLoss:
     """Teacher-forced digit loss under fixed or uniformly random fill order."""
     if arm not in ("fixed_ar", "random_insertion"):
@@ -277,7 +307,7 @@ def fixed_or_random_loss(
     prefix_lengths = _sample_prefix_lengths(lengths, generator)
     prefix = _prefix_mask(order, prefix_lengths) & candidate
     next_cell = order.gather(1, prefix_lengths[:, None]).squeeze(1)
-    output = policy(_partial_states(puzzles, solutions, prefix))
+    output = policy(_partial_states(puzzles, solutions, prefix, condition_mode))
     batch_index = torch.arange(puzzles.shape[0], device=puzzles.device)
     next_logits = output["digit_logits"][batch_index, next_cell]
     target = solutions.reshape(puzzles.shape[0], -1)[batch_index, next_cell] - 1
@@ -345,12 +375,13 @@ def _exact_next_elbo(
     q_logits: torch.Tensor,
     candidate: torch.Tensor,
     prefix: torch.Tensor,
+    condition_mode: ConditionMode,
 ) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """Compute the exact inner expectation over the next unfilled cell."""
     remaining = candidate & ~prefix
     if bool((remaining.sum(dim=-1) <= 0).any()):
         raise ValueError("prefix must leave at least one cell for the exact next-step sum")
-    output = policy(_partial_states(puzzles, solutions, prefix))
+    output = policy(_partial_states(puzzles, solutions, prefix, condition_mode))
     q_log_prob = F.log_softmax(q_logits.masked_fill(~remaining, -torch.inf), dim=-1)
     q_prob = q_log_prob.exp()
     p_cell_log_prob = F.log_softmax(
@@ -384,6 +415,7 @@ def learned_insertion_loss(
     solutions: torch.Tensor,
     generator: torch.Generator,
     rloo_samples: int = 2,
+    condition_mode: ConditionMode = "puzzle_only",
 ) -> MonotoneLoss:
     """Fixed-canvas permutation ELBO with the paper's two-sample RLOO surrogate."""
     if rloo_samples != 2:
@@ -406,7 +438,7 @@ def learned_insertion_loss(
             q_logits, candidate, orders[sample_index], prefix_lengths
         )
         f_value, diagnostics = _exact_next_elbo(
-            policy, puzzles, solutions, q_logits, candidate, prefix
+            policy, puzzles, solutions, q_logits, candidate, prefix, condition_mode
         )
         prefix_log_q.append(log_q)
         f_values.append(f_value)
@@ -469,14 +501,27 @@ def solve_monotone(
     device: torch.device | str,
     seed: int = 0,
     sample_digits: bool = False,
+    condition_mode: ConditionMode = "puzzle_only",
+    solutions: np.ndarray | None = None,
 ) -> SolveResult:
     """Solve each puzzle without revising any selected digit."""
     arm = validate_arm(arm)
     device = torch.device(device)
-    arr = np.asarray(puzzles, dtype=np.uint8)
+    arr = np.array(puzzles, dtype=np.uint8, copy=True)
     if arr.ndim != 3 or arr.shape[1:] != (9, 9):
         raise ValueError(f"expected (N,9,9), got {arr.shape}")
     grids = torch.as_tensor(arr, dtype=torch.long, device=device).clone()
+    mode = validate_condition_mode(condition_mode)
+    hint_tensor = None
+    if mode == "transposed_solution_hint":
+        if solutions is None:
+            raise ValueError("transposed_solution_hint requires oracle solutions")
+        solution_array = np.array(solutions, dtype=np.uint8, copy=True)
+        if solution_array.shape != arr.shape:
+            raise ValueError("oracle solutions must match the puzzle batch shape")
+        hint_tensor = torch.as_tensor(
+            solution_array.transpose(0, 2, 1), dtype=torch.long, device=device
+        )
     generator = torch.Generator(device=device).manual_seed(int(seed))
     steps = torch.zeros(grids.shape[0], dtype=torch.long, device=device)
     policy.eval()
@@ -486,7 +531,7 @@ def solve_monotone(
         active = empty.any(dim=-1)
         if not bool(active.any()):
             break
-        output = policy(encode_partial_grids(grids))
+        output = policy(encode_partial_grids(grids, hint_tensor))
         if arm == "fixed_ar":
             cell = empty.to(torch.int64).argmax(dim=-1)
         elif arm == "random_insertion":

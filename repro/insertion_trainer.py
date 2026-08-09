@@ -18,6 +18,7 @@ from repro import data as data_mod
 from repro.config import SudokuConfig
 from repro.hashing import sha256_file, sha256_json
 from repro.insertion import (
+    ConditionMode,
     InsertionArm,
     SudokuInsertionPolicy,
     SudokuOrderPosterior,
@@ -27,6 +28,7 @@ from repro.insertion import (
     learned_insertion_loss,
     solve_monotone,
     validate_arm,
+    validate_condition_mode,
 )
 from repro.manifest import environment_provenance
 from repro.paths import repo_root
@@ -52,9 +54,11 @@ class InsertionTrainerSettings:
     bf16: bool = True
     time_budget_seconds: Optional[float] = None
     keep_last_checkpoints: int = 3
+    condition_mode: ConditionMode = "puzzle_only"
 
     def __post_init__(self):
         validate_arm(self.arm)
+        validate_condition_mode(self.condition_mode)
         if self.max_steps <= 0 or self.batch_size <= 0:
             raise ValueError("max_steps and batch_size must be positive")
         if not (0 < self.q_lr_ratio <= 1):
@@ -106,6 +110,12 @@ def build_insertion_manifest(
             "can_delete": False,
             "known_fixed_canvas": True,
             "termination": "deterministic when all 81 cells are filled",
+            "condition_mode": settings.condition_mode,
+            "oracle_information": (
+                "the complete solution is exposed through COLOR_1..COLOR_9 on the transposed board; this is an intentional retrieval/reordering control"
+                if settings.condition_mode == "transposed_solution_hint"
+                else None
+            ),
             "learned_insertion": (
                 "fixed-canvas permutation ELBO with exact next-cell expectation and M=2 RLOO"
                 if settings.arm == "learned_insertion"
@@ -147,8 +157,10 @@ def build_insertion_manifest(
                     "SUDOKU_MONOTONE_LADDER_20260808.md",
                     "SUDOKU_MONOTONE_RUNPOD_R0_20260808.md",
                     "SUDOKU_MONOTONE_RUNPOD_R1_20260808.md",
+                    "SUDOKU_VISIBLE_COMPONENT_GATE_20260809.md",
                     "ops/run_insertion_r0_runpod.sh",
                     "ops/run_insertion_r1_runpod.sh",
+                    "ops/run_sudoku_vc1_runpod.sh",
                 )
                 if (repo_root() / name).exists()
             },
@@ -311,7 +323,12 @@ class InsertionTrainer:
         if self.settings.arm == "learned_insertion":
             assert self.posterior is not None
             return learned_insertion_loss(
-                self.policy, self.posterior, puzzles, solutions, self.generator
+                self.policy,
+                self.posterior,
+                puzzles,
+                solutions,
+                self.generator,
+                condition_mode=self.settings.condition_mode,
             )
         return fixed_or_random_loss(
             self.policy,
@@ -319,6 +336,7 @@ class InsertionTrainer:
             solutions,
             self.settings.arm,
             self.generator,
+            self.settings.condition_mode,
         )
 
     def train_step(self) -> tuple[Dict[str, float], float]:
@@ -361,9 +379,17 @@ class InsertionTrainer:
                 self.settings.arm,
                 device=self.device,
                 seed=self.settings.seed + self.step,
+                condition_mode=self.settings.condition_mode,
+                solutions=np.asarray(self.test_split.solutions[:n]),
             )
         aggregate = result.aggregate()
-        aggregate.update({"step": self.step, "arm": self.settings.arm})
+        aggregate.update(
+            {
+                "step": self.step,
+                "arm": self.settings.arm,
+                "condition_mode": self.settings.condition_mode,
+            }
+        )
         rows_path = self.run_dir / f"eval_rows_step_{self.step:09d}.jsonl"
         tmp = rows_path.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as handle:
@@ -489,6 +515,8 @@ class InsertionTrainer:
                 and time.time() - started >= self.settings.time_budget_seconds
             ):
                 break
+        if self.settings.eval_every and self.step % self.settings.eval_every:
+            self.evaluate()
         self.save_checkpoint()
         summary = {
             "arm": self.settings.arm,

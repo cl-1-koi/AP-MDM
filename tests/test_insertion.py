@@ -68,6 +68,17 @@ def test_partial_and_posterior_encodings_preserve_spatial_contract():
     assert torch.all(target[:, 1::4][~missing] == vocab.WHITE)
 
 
+def test_transposed_solution_hint_exposes_relabelled_digits_at_other_cells():
+    puzzles, solutions = batch_pair(1)
+    hints = solutions.transpose(-2, -1)
+    encoded = encode_partial_grids(puzzles, hints)
+    colors = encoded[:, 1::4].reshape(1, 9, 9)
+    expected = vocab.COLOR_MIN + hints - 1
+    assert torch.equal(colors, expected)
+    # The hint needed at (row, col) is deliberately stored at (col, row).
+    assert int(colors[0, 4, 1]) == vocab.COLOR_MIN + int(solutions[0, 1, 4]) - 1
+
+
 @pytest.mark.parametrize("arm", ["fixed_ar", "random_insertion"])
 def test_nonlearned_order_loss_is_finite_and_trains_digit_head(arm):
     puzzles, solutions = batch_pair()
@@ -79,6 +90,21 @@ def test_nonlearned_order_loss_is_finite_and_trains_digit_head(arm):
     result.loss.backward()
     grad = model.digit_head.weight.grad
     assert grad is not None and torch.isfinite(grad).all() and float(grad.abs().sum()) > 0
+
+
+def test_oracle_hint_random_insertion_loss_is_finite():
+    puzzles, solutions = batch_pair()
+    model = SudokuInsertionPolicy(tiny_spec())
+    generator = torch.Generator().manual_seed(17)
+    result = fixed_or_random_loss(
+        model,
+        puzzles,
+        solutions,
+        "random_insertion",
+        generator,
+        condition_mode="transposed_solution_hint",
+    )
+    assert torch.isfinite(result.loss)
 
 
 def test_learned_permutation_elbo_reaches_policy_and_posterior():

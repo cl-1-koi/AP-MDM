@@ -296,6 +296,8 @@ def _insertion_settings_from_args(args: argparse.Namespace):
         q_lr_ratio=args.q_lr_ratio,
         bf16=args.bf16,
         time_budget_seconds=args.time_budget,
+        condition_mode=args.condition_mode,
+        keep_last_checkpoints=args.keep_last_checkpoints,
     )
 
 
@@ -790,6 +792,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--q-lr-ratio", type=float, default=0.01)
     p.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--time-budget", type=float, default=None)
+    p.add_argument("--keep-last-checkpoints", type=int, default=3)
+    p.add_argument(
+        "--condition-mode",
+        choices=("puzzle_only", "transposed_solution_hint"),
+        default="puzzle_only",
+    )
     p.add_argument("--force", action="store_true")
     p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_insertion_manifest)
