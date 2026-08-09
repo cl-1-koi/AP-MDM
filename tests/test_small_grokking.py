@@ -17,9 +17,11 @@ from repro.small_grokking import (
     counterfactual_payloads,
     diagnostic_panel,
     encode_state,
+    evaluate_split,
     fo_ao_loss,
     frozen_splits,
     lo_loss,
+    mdm_loss,
     model_spec,
     posterior_spec,
 )
@@ -92,7 +94,12 @@ def test_diagnostic_panel_emits_all_declared_mechanism_metrics():
     split = type(train)(train.puzzles[:4], train.solutions[:4])
     policy = S4Policy(model_spec(width=32, blocks=1, heads=4))
     panel = diagnostic_panel(
-        policy, split, device=torch.device("cpu"), seed=23, bf16=False
+        policy,
+        split,
+        arm="ao_arm",
+        device=torch.device("cpu"),
+        seed=23,
+        bf16=False,
     )
     assert set(panel) == {
         "keyed_solution",
@@ -103,3 +110,36 @@ def test_diagnostic_panel_emits_all_declared_mechanism_metrics():
         "hint_ablation_delta",
     }
     assert panel["keyed_counterfactual"]["blank_cells"] > 0
+
+
+def test_masked_diffusion_loss_and_rollout_path_are_finite():
+    train, _, _ = frozen_splits(42)
+    puzzles = torch.as_tensor(train.puzzles[:4]).long()
+    solutions = torch.as_tensor(train.solutions[:4]).long()
+    policy = S4Policy(model_spec(width=32, blocks=1, heads=4))
+    loss, metrics = mdm_loss(
+        policy, puzzles, solutions, torch.Generator().manual_seed(29)
+    )
+    assert torch.isfinite(loss)
+    assert metrics["mean_masked"] >= 1
+    loss.backward()
+    assert policy.digit_head.weight.grad is not None
+    panel = diagnostic_panel(
+        policy,
+        type(train)(train.puzzles[:4], train.solutions[:4]),
+        arm="mdm",
+        device=torch.device("cpu"),
+        seed=31,
+        bf16=False,
+    )
+    assert panel["keyed_solution"]["blank_cells"] == 40
+    aggregate, rows = evaluate_split(
+        policy,
+        type(train)(train.puzzles[:4], train.solutions[:4]),
+        "mdm",
+        device=torch.device("cpu"),
+        seed=37,
+        bf16=False,
+    )
+    assert aggregate["n"] == 4
+    assert len(rows) == 4

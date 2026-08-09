@@ -35,8 +35,8 @@ from repro.telemetry import TelemetryWriter, gpu_snapshot
 from repro.trainer import constant_schedule_with_warmup, seed_everything
 
 
-Arm = Literal["fo_arm", "ao_arm", "lo_arm"]
-ARMS = frozenset(("fo_arm", "ao_arm", "lo_arm"))
+Arm = Literal["fo_arm", "ao_arm", "lo_arm", "mdm"]
+ARMS = frozenset(("fo_arm", "ao_arm", "lo_arm", "mdm"))
 SIZE = 4
 BOX_ROWS = BOX_COLS = 2
 CELLS = SIZE * SIZE
@@ -227,11 +227,17 @@ class S4Trunk(nn.Module):
         )
         self.norm_final = LayerNorm(spec.hidden_size)
 
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, tokens: torch.Tensor, sigma: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if tokens.shape[1:] != (SEQUENCE_LENGTH,):
             raise ValueError(f"expected sequence length {SEQUENCE_LENGTH}")
         batch, seq = tokens.shape
-        conditioning = F.silu(self.sigma_map(torch.zeros(batch, device=tokens.device)))
+        if sigma is None:
+            sigma = torch.zeros(batch, device=tokens.device)
+        if sigma.shape != (batch,):
+            raise ValueError("sigma must have shape (batch,)")
+        conditioning = F.silu(self.sigma_map(sigma))
         hidden = self.vocab_embed(tokens)
         rotary = self.rotary_emb(seq, hidden.device, hidden.dtype)
         for block in self.blocks:
@@ -251,8 +257,10 @@ class S4Policy(nn.Module):
         nn.init.zeros_(self.digit_head.weight)
         nn.init.zeros_(self.digit_head.bias)
 
-    def forward(self, tokens: torch.Tensor) -> dict[str, torch.Tensor]:
-        hidden = self.trunk(tokens)[:, 0::4]
+    def forward(
+        self, tokens: torch.Tensor, sigma: torch.Tensor | None = None
+    ) -> dict[str, torch.Tensor]:
+        hidden = self.trunk(tokens, sigma=sigma)[:, 0::4]
         return {
             "cell_logits": self.cell_head(hidden).squeeze(-1),
             "digit_logits": self.digit_head(hidden),
@@ -363,6 +371,45 @@ def fo_ao_loss(
         "digit_nll": loss.detach(),
         "digit_accuracy": (logits.argmax(-1) == target).float().mean().detach(),
         "mean_prefix": prefix_lengths.float().mean().detach(),
+    }
+
+
+def mdm_loss(
+    policy: S4Policy,
+    puzzles: torch.Tensor,
+    solutions: torch.Tensor,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Absorbing-mask diffusion objective over all currently masked cells."""
+    candidate = puzzles.reshape(-1, CELLS) == 0
+    sigma = torch.rand(
+        (len(puzzles),), device=puzzles.device, generator=generator
+    ).clamp_min_(1.0 / CELLS)
+    masked = candidate & (
+        torch.rand(candidate.shape, device=puzzles.device, generator=generator)
+        < sigma[:, None]
+    )
+    missing = ~masked.any(-1)
+    if bool(missing.any()):
+        first = candidate[missing].long().argmax(-1)
+        masked[missing, first] = True
+    targets = solutions.reshape(-1, CELLS)
+    grids = targets.clone()
+    grids[masked] = EMPTY
+    output = policy(
+        encode_state(grids.reshape(-1, SIZE, SIZE), solutions, _hint_order(
+            len(puzzles), puzzles.device, generator
+        )),
+        sigma=sigma,
+    )
+    logits = output["digit_logits"][masked]
+    target = targets[masked] - 1
+    loss = F.cross_entropy(logits, target)
+    return loss, {
+        "digit_nll": loss.detach(),
+        "digit_accuracy": (logits.argmax(-1) == target).float().mean().detach(),
+        "mean_sigma": sigma.mean().detach(),
+        "mean_masked": masked.sum(-1).float().mean().detach(),
     }
 
 
@@ -506,6 +553,7 @@ def payload_metrics(
     split: S4Split,
     payloads: np.ndarray,
     *,
+    arm: Arm,
     device: torch.device,
     seed: int,
     bf16: bool,
@@ -533,6 +581,11 @@ def payload_metrics(
     )
     policy.eval()
     with context:
+        sigma = (
+            (puzzles.reshape(split.n, CELLS) == 0).float().mean(-1)
+            if arm == "mdm"
+            else None
+        )
         prediction = policy(
             encode_state(
                 puzzles,
@@ -540,7 +593,8 @@ def payload_metrics(
                 hints,
                 keyed=keyed,
                 include_hints=include_hints,
-            )
+            ),
+            sigma=sigma,
         )["digit_logits"].argmax(-1) + 1
     blank = puzzles.reshape(split.n, CELLS) == 0
     flat_payload = payload.reshape(split.n, CELLS)
@@ -569,18 +623,26 @@ def diagnostic_panel(
     policy: S4Policy,
     split: S4Split,
     *,
+    arm: Arm,
     device: torch.device,
     seed: int,
     bf16: bool,
 ) -> dict[str, Any]:
     """Run the shared keyed, ablation, and counterfactual mechanism panel."""
     normal = payload_metrics(
-        policy, split, split.solutions, device=device, seed=seed, bf16=bf16
+        policy,
+        split,
+        split.solutions,
+        arm=arm,
+        device=device,
+        seed=seed,
+        bf16=bf16,
     )
     unkeyed = payload_metrics(
         policy,
         split,
         split.solutions,
+        arm=arm,
         device=device,
         seed=seed,
         bf16=bf16,
@@ -590,6 +652,7 @@ def diagnostic_panel(
         policy,
         split,
         split.solutions,
+        arm=arm,
         device=device,
         seed=seed,
         bf16=bf16,
@@ -599,6 +662,7 @@ def diagnostic_panel(
         policy,
         split,
         counterfactual_payloads(split.solutions, seed + 1),
+        arm=arm,
         device=device,
         seed=seed,
         bf16=bf16,
@@ -638,14 +702,22 @@ def evaluate_split(
             break
         context = torch.autocast("cuda", dtype=torch.bfloat16) if device.type == "cuda" and bf16 else nullcontext()
         with context:
-            output = policy(encode_state(grids, solutions, hints))
+            sigma = empty.float().mean(-1) if arm == "mdm" else None
+            output = policy(encode_state(grids, solutions, hints), sigma=sigma)
+        if arm == "mdm":
+            flat = grids.reshape(split.n, CELLS)
+            prediction = output["digit_logits"].argmax(-1) + 1
+            flat[empty] = prediction[empty]
+            break
         if arm == "fo_arm":
             cell = empty.long().argmax(-1)
         elif arm == "ao_arm":
             scores = torch.rand(empty.shape, device=device, generator=generator)
             cell = scores.masked_fill(~empty, -torch.inf).argmax(-1)
-        else:
+        elif arm == "lo_arm":
             cell = output["cell_logits"].masked_fill(~empty, -torch.inf).argmax(-1)
+        else:
+            raise ValueError(f"unsupported rollout arm {arm}")
         batch = torch.arange(split.n, device=device)
         digit = output["digit_logits"][batch, cell].argmax(-1) + 1
         flat = grids.reshape(split.n, CELLS)
@@ -764,6 +836,7 @@ def run(settings: Settings) -> dict[str, Any]:
             "fixed_canvas": True,
             "variable_length": False,
             "learned_order": settings.arm == "lo_arm",
+            "masked_diffusion": settings.arm == "mdm",
         },
         "data": {"train": train.provenance(), "test": test.provenance(), "overlap": overlap},
         "architecture": {
@@ -820,6 +893,10 @@ def run(settings: Settings) -> dict[str, Any]:
                 if settings.arm == "lo_arm":
                     assert posterior is not None
                     loss, metrics = lo_loss(policy, posterior, puzzles, solutions, generator)
+                elif settings.arm == "mdm":
+                    loss, metrics = mdm_loss(
+                        policy, puzzles, solutions, generator
+                    )
                 else:
                     loss, metrics = fo_ao_loss(policy, puzzles, solutions, settings.arm, generator)
             if not bool(torch.isfinite(loss)):
@@ -858,6 +935,7 @@ def run(settings: Settings) -> dict[str, Any]:
                     diagnostics = diagnostic_panel(
                         policy,
                         split,
+                        arm=settings.arm,
                         device=device,
                         seed=diagnostic_seed,
                         bf16=settings.bf16,

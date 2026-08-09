@@ -13,7 +13,7 @@ weight_decay="$4"
 gpu_index="$5"
 
 case "$arm" in
-  fo_arm|ao_arm|lo_arm) ;;
+  fo_arm|ao_arm|lo_arm|mdm) ;;
   *) echo "unsupported S4 arm: $arm" >&2; exit 2 ;;
 esac
 case "$weight_decay" in
