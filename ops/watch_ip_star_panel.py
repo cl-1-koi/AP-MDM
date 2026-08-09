@@ -39,6 +39,7 @@ class Workload:
     local_parent: str
     expected_final_step: int
     expected_checkpoint_interval: int
+    hourly_cost_usd: float
     queued_next_experiment: str
     retain_rationale: str
 
@@ -67,22 +68,9 @@ WORKLOADS = (
         local_parent="/home/ubuntu/apmdm-official-data/ip-star-runpod-82i4fwoch34p40",
         expected_final_step=78_100,
         expected_checkpoint_interval=5_000,
+        hourly_cost_usd=0.99,
         queued_next_experiment="G1 verdict, then GuacaMol capacity-matched smoke only if learned order wins",
         retain_rationale="retain for declared G1-to-G2 handoff; 32-vCPU L40S is high-value",
-    ),
-    Workload(
-        arm="fixed_fo_arm",
-        pod_id="y9ydtc22ct7lil",
-        host="69.30.85.132",
-        port=22006,
-        tmux_session="ip_fixed_full",
-        remote_parent="/workspace/artifacts/ip-star",
-        run_name="fixed-b0d54bc-s42",
-        local_parent="/home/ubuntu/apmdm-official-data/ip-star-runpod-y9ydtc22ct7lil",
-        expected_final_step=78_100,
-        expected_checkpoint_interval=5_000,
-        queued_next_experiment="official/predecessor hard-star checkpoint audit or fixed-canvas AO-ARM reconstruction",
-        retain_rationale="retain briefly for declared follow-up; ordinary A40 at $0.44/hr",
     ),
     Workload(
         arm="random_ao_ip",
@@ -95,6 +83,7 @@ WORKLOADS = (
         local_parent="/home/ubuntu/apmdm-official-data/ip-star-runpod-2fz6v1qstmkiez",
         expected_final_step=78_100,
         expected_checkpoint_interval=5_000,
+        hourly_cost_usd=0.44,
         queued_next_experiment="official/predecessor hard-star XLNet audit or fixed-canvas AO-ARM reconstruction",
         retain_rationale="retain briefly for declared follow-up; ordinary A40 at $0.44/hr",
     ),
@@ -322,7 +311,7 @@ def poll_once() -> dict[str, Any]:
     snapshot = {
         "schema": "ip-star-supervisor-v1",
         "checked_utc": utc_now(),
-        "hourly_burn_usd": 1.87,
+        "hourly_burn_usd": sum(workload.hourly_cost_usd for workload in WORKLOADS),
         "inventory": active_inventory(),
         "workloads": [poll_workload(workload) for workload in WORKLOADS],
     }
