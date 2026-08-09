@@ -222,7 +222,12 @@ def _manifest(
             "arxiv": "2606.02133v3",
             "pdf_sha256": _file_sha256(paper) if paper.exists() else None,
             "source_sha256": _file_sha256(source) if source.exists() else None,
-            "reported_exact_match_percent": {"fixed": 24.0, "random": 26.5, "learned": 83.0}[settings.arm],
+            "reported_exact_match_percent": {"fixed": 24.0, "random": None, "learned": 83.0}[settings.arm],
+            "arm_note": (
+                "random is variable-length AO-IP; the paper's 26.5% star-graph baseline is fixed-canvas AO-ARM"
+                if settings.arm == "random"
+                else None
+            ),
         },
         "upstream_task_source": {
             "repository": "https://github.com/dhruvdcoder/ILM",

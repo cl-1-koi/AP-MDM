@@ -69,11 +69,15 @@ Use the paper-declared planning architecture and optimizer:
 - EMA 0.999 after step 200; batch 64; 100 epochs.
 
 Use the predecessor's released split sizes and freeze our generated split
-seeds and hashes before observing results. Compare matched FO-ARM,
-random-order AO-IP, and learned IP arms. The paper reports 24.0%, 26.5%, and
-83.0% sequence accuracy respectively, so this is a high-signal mechanistic
-gate. Report exact-match, token accuracy, Hamming distance, Levenshtein
-distance, ELBO, RLOO variance, termination errors, examples/s, and GPU-hours.
+seeds and hashes before observing results. Compare matched FO-ARM and learned
+IP arms; the paper reports 24.0% and 83.0% sequence accuracy respectively, so
+this is a high-signal mechanistic gate. The table's 26.5% result is a
+fixed-canvas AO-ARM, not the variable-length random-policy AO-IP ablation used
+later for GuacaMol. Reconstruct AO-ARM separately before comparing to 26.5%; an
+AO-IP star-graph arm may still isolate the learned-order mechanism but has no
+paper-reported star-graph target. Report exact-match, token accuracy, Hamming
+distance, Levenshtein distance, ELBO, RLOO variance, termination errors,
+examples/s, and GPU-hours.
 
 ### G2: GuacaMol/ChEMBL SMILES
 
