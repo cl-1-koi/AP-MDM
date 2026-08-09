@@ -53,6 +53,29 @@ payload. A puzzle memorizer follows the original solution or fails when keys
 are load-bearing. Full-rollout train and held-out exact rates remain separate
 from the one-forward blank-cell diagnostics.
 
+### D0 result
+
+The frozen update-78,100 checkpoint decisively follows the memorization
+explanation. On seen training puzzles with fresh hint shuffles it predicted the
+normal solution on 99.879% of blank cells. When every supplied payload digit
+was changed, it followed the counterfactual payload on only 0.017% of blanks
+but still predicted the original solution on 99.914%; 96/100 puzzles matched
+the memorized solution completely in one forward pass. Train rollout validity
+was 70/100.
+
+On held-out puzzles, keyed normal-solution accuracy was 27.825%, versus 22.525%
+with shuffled hints but no keys and 22.319% with no hints. Thus keys provide a
+small real signal, but the counterfactual arm was near chance at 9.321% payload
+accuracy while remaining at 27.420% solution accuracy. The model did not learn
+a reusable associative-copy algorithm by the matched endpoint. D0 artifacts
+are byte-for-byte verified under
+`/home/ubuntu/apmdm-official-data/sudoku-grokking/d0/d0-keyed-5e968f5`.
+
+S4 must therefore include two distinct outcomes: finite-puzzle train/test
+generalization for grokking, and counterfactual payload following for mechanism
+identification. A held-out Sudoku improvement without payload following cannot
+be attributed to content-addressed retrieval.
+
 ## S4: 4x4 mechanism and grokking phase diagram
 
 Use 2x2 boxes. Enumerate the 288 valid completed 4x4 grids, freeze disjoint
@@ -122,4 +145,3 @@ about seven hours.
    commit, data hashes, settings, checkpoints, and artifact closure.
 5. Keep a declared next arm queued on every retained pod. Terminate only after
    verified closure when no compatible follow-up is ready.
-
