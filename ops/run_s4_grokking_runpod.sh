@@ -13,7 +13,7 @@ weight_decay="$4"
 gpu_index="$5"
 
 case "$arm" in
-  fo_arm|ao_arm|lo_arm|mdm|ao_ip|ip) ;;
+  fo_arm|ao_arm|lo_arm|mdm|ao_ip|ip|ap_mdm) ;;
   *) echo "unsupported S4 arm: $arm" >&2; exit 2 ;;
 esac
 case "$weight_decay" in
@@ -77,7 +77,9 @@ common_args=(
   --log-every 1000
   --eval-steps 1000,3000,10000,30000,100000,300000,1000000
 )
-if [ "$arm" = "ao_ip" ] || [ "$arm" = "ip" ]; then
+if [ "$arm" = "ap_mdm" ]; then
+  python -m repro.s4_apmdm "${common_args[@]:2}" --blocks 2
+elif [ "$arm" = "ao_ip" ] || [ "$arm" = "ip" ]; then
   python -m repro.s4_insertion "${common_args[@]}" --layers 2
 else
   python -m repro.small_grokking "${common_args[@]}" --blocks 2

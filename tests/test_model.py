@@ -119,6 +119,21 @@ def test_variable_sequence_length_is_supported(paper_config):
         assert out["unmasking_logits"].shape[1] == length
 
 
+def test_attention_mask_blocks_padded_tokens():
+    model = build_model(TINY, seed=0).eval()
+    left = torch.randint(0, TINY.vocab_size, (2, 12))
+    right = left.clone()
+    right[:, 8:] = (right[:, 8:] + 7) % TINY.vocab_size
+    mask = torch.zeros_like(left, dtype=torch.bool)
+    mask[:, :8] = True
+    with torch.no_grad():
+        a = model(left, attention_mask=mask)["remasking_logits"][:, :8]
+        b = model(right, attention_mask=mask)["remasking_logits"][:, :8]
+    assert torch.allclose(a, b)
+    with pytest.raises(ValueError):
+        model(left, attention_mask=mask[:, :-1])
+
+
 def test_architecture_signature_is_stable_and_distinguishing(paper_config, historical_config):
     assert paper_config.model.signature() != historical_config.model.signature()
     assert "L=6" in paper_config.model.signature()

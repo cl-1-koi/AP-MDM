@@ -142,7 +142,13 @@ class DDiTBlock(nn.Module):
     def _modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
         return x * (1 + scale) + shift
 
-    def forward(self, x: torch.Tensor, rotary: tuple[torch.Tensor, torch.Tensor], c: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        rotary: tuple[torch.Tensor, torch.Tensor],
+        c: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         batch, seq, _ = x.shape
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
             self.adaLN_modulation(c)[:, None].chunk(6, dim=2)
@@ -156,14 +162,25 @@ class DDiTBlock(nn.Module):
         k = apply_rotary(qkv[:, :, 1], cos.to(qkv.dtype), sin.to(qkv.dtype))
         v = qkv[:, :, 2]
 
+        sdpa_mask = (
+            attention_mask[:, None, None, :]
+            if attention_mask is not None
+            else None
+        )
         attn = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), is_causal=False
+            q.transpose(1, 2),
+            k.transpose(1, 2),
+            v.transpose(1, 2),
+            attn_mask=sdpa_mask,
+            is_causal=False,
         )
         attn = attn.transpose(1, 2).reshape(batch, seq, -1)
         x = x_skip + gate_msa * F.dropout(self.attn_out(attn), p=self.dropout, training=self.training)
 
         h = self._modulate(self.norm2(x), shift_mlp, scale_mlp)
         x = x + gate_mlp * F.dropout(self.mlp(h), p=self.dropout, training=self.training)
+        if attention_mask is not None:
+            x = x.masked_fill(~attention_mask[..., None], 0)
         return x
 
 
@@ -271,7 +288,10 @@ class APMDMEncoder(nn.Module):
         return ParameterCount(total=total, trainable=trainable, by_group=groups)
 
     def forward(
-        self, indices: torch.Tensor, sigma: Optional[torch.Tensor] = None
+        self,
+        indices: torch.Tensor,
+        sigma: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the encoder.
 
@@ -290,6 +310,10 @@ class APMDMEncoder(nn.Module):
             raise ValueError(
                 f"token ids outside [0, {self.vocab_size}) present in input"
             )
+        if attention_mask is not None:
+            if attention_mask.shape != indices.shape:
+                raise ValueError("attention_mask must match indices")
+            attention_mask = attention_mask.bool()
 
         if sigma is None:
             sigma = torch.zeros(batch, device=indices.device)
@@ -298,10 +322,12 @@ class APMDMEncoder(nn.Module):
             sigma = torch.zeros_like(sigma)
 
         x = self.vocab_embed(indices)
+        if attention_mask is not None:
+            x = x.masked_fill(~attention_mask[..., None], 0)
         c = F.silu(self.sigma_map(sigma)).to(x.dtype)
         rotary = self.rotary_emb(seq, indices.device, x.dtype)
         for block in self.blocks:
-            x = block(x, rotary, c)
+            x = block(x, rotary, c, attention_mask=attention_mask)
         return self.output_layer(x, c)
 
 

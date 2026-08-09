@@ -36,6 +36,16 @@ The existing Sudoku names map as follows: `fixed_ar` is FO-ARM;
 `learned_insertion` on that canvas is LO-ARM-like, not paper-native IP. The
 existing star implementation contains actual variable-length AO-IP and IP.
 
+Current S4 adapters preserve those distinctions. FO-ARM, AO-ARM, LO-ARM, and
+MDM use the shared 16-cell canvas. AO-IP and IP instead begin with the six
+given digits as a variable-length sequence, insert the ten missing digits at
+learned locations, and must emit termination; IP alone learns a Plackett-Luce
+order posterior with M=2 RLOO. AP-MDM consumes on-the-fly aligned corruptions
+of terminal grids and trains distinct unmask, remask, insert, and delete heads
+with variable-length padded attention. Its extra edit supervision is explicit
+in the manifest. IRED remains the separate energy comparator and is not
+implemented by relabeling any of these generators.
+
 ## D0: decisive audit of the completed 9x9 keyed model
 
 Before calling the VC-1c gap grokking, evaluate its frozen checkpoints on:
