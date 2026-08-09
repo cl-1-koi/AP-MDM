@@ -52,14 +52,27 @@ def ssh(command: str) -> subprocess.CompletedProcess[str]:
 
 def sync(remote_dir: str, local_dir: Path) -> None:
     local_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [
-            "rsync", "-a", "--partial", "--append-verify",
-            "-e", f"ssh -i /home/ubuntu/.ssh/id_ed25519 -p {PORT} -o BatchMode=yes",
-            f"{ENDPOINT}:{remote_dir.rstrip('/')}/", str(local_dir) + "/",
-        ],
-        check=True,
-    )
+    remote_stderr = local_dir / "sync_remote.stderr"
+    with remote_stderr.open("wb") as stderr_handle:
+        remote = subprocess.Popen(
+            [
+                "ssh", "-i", "/home/ubuntu/.ssh/id_ed25519", "-p", PORT,
+                "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", ENDPOINT,
+                "tar", "-C", remote_dir.rstrip("/"), "-cf", "-", ".",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=stderr_handle,
+        )
+        assert remote.stdout is not None
+        extracted = subprocess.run(
+            ["tar", "-C", str(local_dir), "-xf", "-"], stdin=remote.stdout
+        )
+        remote.stdout.close()
+        remote_status = remote.wait()
+    if extracted.returncode != 0 or remote_status != 0:
+        raise RuntimeError(
+            f"artifact sync failed: remote={remote_status}, local={extracted.returncode}"
+        )
 
 
 def verify_success(local_dir: Path, expected_commit: str) -> dict[str, Any]:
