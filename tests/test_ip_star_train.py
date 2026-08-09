@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from repro.ip_star_eval_checkpoint import evaluate_checkpoint
 from repro.ip_star_model import TransformerSpec
 from repro.ip_star_train import TrainSettings, train
 
@@ -88,3 +89,36 @@ def test_tiny_learned_training_reaches_checkpoint(tmp_path: Path):
     resumed_result = train(resumed)
     assert resumed_result["step"] == 2
     assert Path(resumed_result["checkpoint"]).is_file()
+
+
+def test_checkpoint_evaluator_records_raw_and_frozen_test_provenance(tmp_path: Path):
+    output = tmp_path / "fixed-eval-source"
+    settings = TrainSettings(
+        arm="fixed",
+        output_dir=str(output),
+        epochs=1,
+        batch_size=2,
+        max_steps=1,
+        warmup_steps=1,
+        device="cpu",
+        bf16=False,
+        log_every=1,
+        eval_every=1,
+        checkpoint_every=1,
+        eval_limit=1,
+        train_count=2,
+        validation_count=1,
+        test_count=1,
+        decoder_spec=TransformerSpec(width=16, layers=1, heads=2, dropout=0.0),
+        posterior_spec=TransformerSpec(width=16, layers=1, heads=2, dropout=0.0),
+    )
+    trained = train(settings)
+    evaluation_path = tmp_path / "evaluation.json"
+    result = evaluate_checkpoint(
+        trained["checkpoint"], output=evaluation_path, device="cpu", test_count=3
+    )
+    assert result["checkpoint_step"] == 1
+    assert result["arm"] == "fixed"
+    assert result["test_count"] == 3
+    assert set(result["weights"]) == {"raw"}
+    assert json.loads(evaluation_path.read_text()) == result
