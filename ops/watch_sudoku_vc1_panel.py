@@ -49,30 +49,17 @@ class Workload:
 
 WORKLOADS = (
     Workload(
-        condition_mode="transposed_solution_hint",
+        condition_mode="aligned_solution_hint",
         pod_id="82i4fwoch34p40",
         host="64.247.206.218",
         port=11960,
         hourly_cost_usd=0.99,
-        tmux_session="vc1_oracle_full",
-        remote_output="/workspace/artifacts/sudoku-vc1/full-oracle-9fc91fe-s42",
-        run_id="vc1-transposed_solution_hint-s42-u78100",
-        local_parent="/home/ubuntu/apmdm-official-data/sudoku-vc1/oracle",
-        queued_next_experiment="VC-2 visible-answer star length scaling after the matched VC-1 verdict",
-        retain_rationale="retain high-value 32-vCPU L40S for declared VC-2 follow-up",
-    ),
-    Workload(
-        condition_mode="puzzle_only",
-        pod_id="2fz6v1qstmkiez",
-        host="69.30.85.29",
-        port=22104,
-        hourly_cost_usd=0.44,
-        tmux_session="vc1_hidden_full",
-        remote_output="/workspace/artifacts/sudoku-vc1/full-hidden-9fc91fe-s42",
-        run_id="vc1-puzzle_only-s42-u78100",
-        local_parent="/home/ubuntu/apmdm-official-data/sudoku-vc1/hidden",
-        queued_next_experiment="fixed-canvas AO-ARM reconstruction or VC-2 matched length control",
-        retain_rationale="retain ordinary A40 only through VC-1 closure and a ready immediate follow-up",
+        tmux_session="vc1_aligned_full",
+        remote_output="/workspace/artifacts/sudoku-vc1/full-aligned-c1c458e-s42",
+        run_id="vc1-aligned_solution_hint-s42-u78100",
+        local_parent="/home/ubuntu/apmdm-official-data/sudoku-vc1/aligned",
+        queued_next_experiment="keyed shuffled-answer control, then visible-answer star length scaling",
+        retain_rationale="retain high-value 32-vCPU L40S for declared keyed-reordering follow-up",
     ),
 )
 
