@@ -69,6 +69,7 @@ class TrainSettings:
     eval_every: int = 100
     checkpoint_every: int = 100
     eval_limit: int = 100
+    train_eval_limit: int = 0
     train_count: int = TRAIN_COUNT
     validation_count: int = VALIDATION_COUNT
     test_count: int = TEST_COUNT
@@ -497,15 +498,66 @@ def train(settings: TrainSettings) -> dict:
 
                 if step % settings.eval_every == 0 or step == settings.stop_step:
                     selected_validation = validation_graphs[: settings.eval_limit]
-                    with ema.average_parameters(decoder) as using_ema:
-                        metrics = evaluate(
+                    raw_validation = evaluate(
+                        decoder,
+                        selected_validation,
+                        arm=settings.arm,
+                        device=device,
+                        batch_size=settings.batch_size,
+                    )
+                    telemetry.write(
+                        "evaluation",
+                        step=step,
+                        split="validation",
+                        weights="raw",
+                        **raw_validation,
+                    )
+                    if settings.train_eval_limit:
+                        raw_train = evaluate(
                             decoder,
-                            selected_validation,
+                            train_graphs[: settings.train_eval_limit],
                             arm=settings.arm,
                             device=device,
                             batch_size=settings.batch_size,
                         )
-                    telemetry.write("evaluation", step=step, using_ema=using_ema, **metrics)
+                        telemetry.write(
+                            "evaluation",
+                            step=step,
+                            split="train",
+                            weights="raw",
+                            **raw_train,
+                        )
+                    with ema.average_parameters(decoder) as using_ema:
+                        if using_ema:
+                            ema_validation = evaluate(
+                                decoder,
+                                selected_validation,
+                                arm=settings.arm,
+                                device=device,
+                                batch_size=settings.batch_size,
+                            )
+                            telemetry.write(
+                                "evaluation",
+                                step=step,
+                                split="validation",
+                                weights="ema",
+                                **ema_validation,
+                            )
+                            if settings.train_eval_limit:
+                                ema_train = evaluate(
+                                    decoder,
+                                    train_graphs[: settings.train_eval_limit],
+                                    arm=settings.arm,
+                                    device=device,
+                                    batch_size=settings.batch_size,
+                                )
+                                telemetry.write(
+                                    "evaluation",
+                                    step=step,
+                                    split="train",
+                                    weights="ema",
+                                    **ema_train,
+                                )
 
                 if step % settings.checkpoint_every == 0 or step == settings.stop_step:
                     final_checkpoint = checkpoint_dir / f"step_{step:08d}.pt"
@@ -555,6 +607,7 @@ def parse_args() -> TrainSettings:
     parser.add_argument("--eval-every", type=int, default=100)
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--eval-limit", type=int, default=100)
+    parser.add_argument("--train-eval-limit", type=int, default=0)
     parser.add_argument("--train-count", type=int, default=TRAIN_COUNT)
     parser.add_argument("--validation-count", type=int, default=VALIDATION_COUNT)
     parser.add_argument("--test-count", type=int, default=TEST_COUNT)
@@ -583,6 +636,7 @@ def parse_args() -> TrainSettings:
         eval_every=arguments.eval_every,
         checkpoint_every=arguments.checkpoint_every,
         eval_limit=arguments.eval_limit,
+        train_eval_limit=arguments.train_eval_limit,
         train_count=arguments.train_count,
         validation_count=arguments.validation_count,
         test_count=arguments.test_count,

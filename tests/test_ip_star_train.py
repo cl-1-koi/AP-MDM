@@ -24,6 +24,7 @@ def test_tiny_fixed_training_emits_metrics_and_checkpoint(tmp_path: Path):
         eval_every=2,
         checkpoint_every=2,
         eval_limit=2,
+        train_eval_limit=2,
         train_count=8,
         validation_count=2,
         test_count=2,
@@ -43,6 +44,11 @@ def test_tiny_fixed_training_emits_metrics_and_checkpoint(tmp_path: Path):
         "evaluation",
         "checkpoint",
         "complete",
+    }
+    evaluation = [record for record in records if record["kind"] == "evaluation"]
+    assert {(record["split"], record["weights"]) for record in evaluation} == {
+        ("validation", "raw"),
+        ("train", "raw"),
     }
 
 
