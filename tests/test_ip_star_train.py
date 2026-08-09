@@ -76,3 +76,15 @@ def test_tiny_learned_training_reaches_checkpoint(tmp_path: Path):
     result = train(settings)
     assert result["step"] == 1
     assert Path(result["checkpoint"]).is_file()
+
+    resumed = TrainSettings(
+        **{
+            **settings.__dict__,
+            "epochs": 2,
+            "max_steps": 2,
+            "resume": result["checkpoint"],
+        }
+    )
+    resumed_result = train(resumed)
+    assert resumed_result["step"] == 2
+    assert Path(resumed_result["checkpoint"]).is_file()

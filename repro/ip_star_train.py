@@ -409,11 +409,11 @@ def train(settings: TrainSettings) -> dict:
             posterior.load_state_dict(state["posterior"])
         optimizer.load_state_dict(state["optimizer"])
         ema.load_state_dict(state["ema"])
-        objective_generator.set_state(state["objective_generator_rng"])
+        objective_generator.set_state(state["objective_generator_rng"].cpu())
         step = int(state["step"])
         torch.set_rng_state(state["torch_rng"].cpu())
         if device.type == "cuda" and state.get("cuda_rng") is not None:
-            torch.cuda.set_rng_state_all(state["cuda_rng"])
+            torch.cuda.set_rng_state_all([rng_state.cpu() for rng_state in state["cuda_rng"]])
 
     manifest = _manifest(settings, split_hashes, decoder, posterior)
     _atomic_json(output_dir / "manifest.json", manifest)
