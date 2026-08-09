@@ -13,7 +13,7 @@ weight_decay="$4"
 gpu_index="$5"
 
 case "$arm" in
-  fo_arm|ao_arm|lo_arm|mdm|ao_ip|ip|ap_mdm) ;;
+  fo_arm|ao_arm|lo_arm|mdm|ao_ip|ip|ap_mdm|ired) ;;
   *) echo "unsupported S4 arm: $arm" >&2; exit 2 ;;
 esac
 case "$weight_decay" in
@@ -79,6 +79,10 @@ common_args=(
 )
 if [ "$arm" = "ap_mdm" ]; then
   python -m repro.s4_apmdm "${common_args[@]:2}" --blocks 2
+elif [ "$arm" = "ired" ]; then
+  # IRED differentiates through the energy's input gradient. Keep that
+  # higher-order path in fp32 even when the other small arms use bf16.
+  python -m repro.s4_ired "${common_args[@]:2}" --blocks 2 --inner-steps 20 --no-bf16
 elif [ "$arm" = "ao_ip" ] || [ "$arm" = "ip" ]; then
   python -m repro.s4_insertion "${common_args[@]}" --layers 2
 else

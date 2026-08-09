@@ -148,6 +148,7 @@ class DDiTBlock(nn.Module):
         rotary: tuple[torch.Tensor, torch.Tensor],
         c: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        manual_attention: bool = False,
     ) -> torch.Tensor:
         batch, seq, _ = x.shape
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
@@ -167,13 +168,27 @@ class DDiTBlock(nn.Module):
             if attention_mask is not None
             else None
         )
-        attn = F.scaled_dot_product_attention(
-            q.transpose(1, 2),
-            k.transpose(1, 2),
-            v.transpose(1, 2),
-            attn_mask=sdpa_mask,
-            is_causal=False,
-        )
+        q_heads = q.transpose(1, 2)
+        k_heads = k.transpose(1, 2)
+        v_heads = v.transpose(1, 2)
+        if manual_attention:
+            # Energy-gradient objectives differentiate through the input
+            # gradient.  PyTorch's fused SDPA kernels do not universally
+            # implement that second derivative, whereas the mathematically
+            # equivalent explicit attention does.
+            scores = q_heads @ k_heads.transpose(-2, -1)
+            scores = scores / math.sqrt(self.head_dim)
+            if sdpa_mask is not None:
+                scores = scores.masked_fill(~sdpa_mask, -torch.inf)
+            attn = scores.softmax(dim=-1) @ v_heads
+        else:
+            attn = F.scaled_dot_product_attention(
+                q_heads,
+                k_heads,
+                v_heads,
+                attn_mask=sdpa_mask,
+                is_causal=False,
+            )
         attn = attn.transpose(1, 2).reshape(batch, seq, -1)
         x = x_skip + gate_msa * F.dropout(self.attn_out(attn), p=self.dropout, training=self.training)
 

@@ -43,8 +43,14 @@ learned locations, and must emit termination; IP alone learns a Plackett-Luce
 order posterior with M=2 RLOO. AP-MDM consumes on-the-fly aligned corruptions
 of terminal grids and trains distinct unmask, remask, insert, and delete heads
 with variable-length padded attention. Its extra edit supervision is explicit
-in the manifest. IRED remains the separate energy comparator and is not
-implemented by relabeling any of these generators.
+in the manifest. IRED is implemented as a separate Transformer energy
+comparator with ten diffusion energy landscapes, energy-gradient noise
+prediction, a 0.05-weight negative-energy term, and twenty energy-minimization
+steps per landscape. It uses the shared keyed condition ABI but is not
+implemented by relabeling any of the generation families. Its attention is
+currently evaluated with explicit attention algebra because training requires
+a mixed second derivative through the input-energy gradient; any fused-kernel
+substitution must first pass numerical gradient-equivalence tests.
 
 ## D0: decisive audit of the completed 9x9 keyed model
 
