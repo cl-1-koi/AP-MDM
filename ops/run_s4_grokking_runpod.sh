@@ -13,7 +13,7 @@ weight_decay="$4"
 gpu_index="$5"
 
 case "$arm" in
-  fo_arm|ao_arm|lo_arm|mdm) ;;
+  fo_arm|ao_arm|lo_arm|mdm|ao_ip|ip) ;;
   *) echo "unsupported S4 arm: $arm" >&2; exit 2 ;;
 esac
 case "$weight_decay" in
@@ -61,22 +61,27 @@ if not torch.cuda.is_available():
 print("CUDA_PREFLIGHT", torch.__version__, torch.cuda.get_device_name(0))
 PY
 
-python -m repro.small_grokking \
-  --arm "$arm" \
-  --output "$output_dir" \
-  --max-steps 1000000 \
-  --batch-size 256 \
-  --width 64 \
-  --blocks 2 \
-  --heads 4 \
-  --learning-rate 0.0001 \
-  --weight-decay "$weight_decay" \
-  --warmup-steps 250 \
-  --seed 42 \
-  --device cuda \
-  --bf16 \
-  --log-every 1000 \
+common_args=(
+  --arm "$arm"
+  --output "$output_dir"
+  --max-steps 1000000
+  --batch-size 256
+  --width 64
+  --heads 4
+  --learning-rate 0.0001
+  --weight-decay "$weight_decay"
+  --warmup-steps 250
+  --seed 42
+  --device cuda
+  --bf16
+  --log-every 1000
   --eval-steps 1000,3000,10000,30000,100000,300000,1000000
+)
+if [ "$arm" = "ao_ip" ] || [ "$arm" = "ip" ]; then
+  python -m repro.s4_insertion "${common_args[@]}" --layers 2
+else
+  python -m repro.small_grokking "${common_args[@]}" --blocks 2
+fi
 
 test -s "$output_dir/completion.json"
 echo "S4_GROKKING_COMPLETE arm=$arm weight_decay=$weight_decay source=$source_commit"

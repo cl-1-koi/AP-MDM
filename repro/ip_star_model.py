@@ -118,10 +118,17 @@ class TransformerBlock(nn.Module):
 
 
 class SequenceTransformer(nn.Module):
-    def __init__(self, spec: TransformerSpec, vocab_size: int = EOS_ID + 1):
+    def __init__(
+        self,
+        spec: TransformerSpec,
+        vocab_size: int = EOS_ID + 1,
+        padding_idx: int = PAD_ID,
+    ):
         super().__init__()
         self.spec = spec
-        self.token_embedding = nn.Embedding(vocab_size, spec.width, padding_idx=PAD_ID)
+        self.token_embedding = nn.Embedding(
+            vocab_size, spec.width, padding_idx=padding_idx
+        )
         self.blocks = nn.ModuleList(TransformerBlock(spec) for _ in range(spec.layers))
         self.norm = nn.LayerNorm(spec.width)
         nn.init.normal_(self.token_embedding.weight, std=0.02)
