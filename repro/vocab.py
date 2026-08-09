@@ -33,6 +33,12 @@ BRANCH = 29
 SEPARATOR = 30
 EOS = 31
 
+# VC-1c content-addressability control.  A key token names one of the 81
+# logical Sudoku cells and is shared by the query cell and its shuffled answer
+# hint.  Start above the released runtime's three reserved embedding rows
+# (31..33) so the control cannot alias any existing token.
+CELL_KEY_MIN = 34
+
 #: Number of embedding rows required by generated Sudoku data.  Ids 0..30.
 VOCAB_SIZE = 31
 
@@ -42,6 +48,9 @@ GENERATOR_DECLARED_VOCAB_SIZE = 32
 TOKENS_PER_CELL = 4
 NUM_CELLS = 81
 SEQUENCE_LENGTH = NUM_CELLS * TOKENS_PER_CELL  # 324
+
+CELL_KEY_MAX = CELL_KEY_MIN + NUM_CELLS - 1
+KEYED_VOCAB_SIZE = CELL_KEY_MAX + 1
 
 SLOT_VALUE, SLOT_COLOR, SLOT_MARKER, SLOT_SEPARATOR = 0, 1, 2, 3
 
@@ -104,6 +113,8 @@ def token_name(token_id: int) -> str:
         return "[SEP]"
     if token_id == EOS:
         return "[EOS]"
+    if CELL_KEY_MIN <= token_id <= CELL_KEY_MAX:
+        return f"[CELL_KEY_{token_id - CELL_KEY_MIN}]"
     return f"[UNK_{token_id}]"
 
 

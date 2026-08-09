@@ -8,7 +8,11 @@ import json
 import pytest
 
 from repro import data as data_mod
-from repro.insertion import SudokuInsertionPolicy, effective_model_spec
+from repro.insertion import (
+    SudokuInsertionPolicy,
+    condition_model_spec,
+    effective_model_spec,
+)
 from repro.insertion_trainer import (
     InsertionTrainer,
     InsertionTrainerSettings,
@@ -158,6 +162,40 @@ def test_manifest_seals_oracle_hint_as_an_explicit_control(
     boundary = manifest["mechanism_boundary"]
     assert boundary["condition_mode"] == "transposed_solution_hint"
     assert "complete solution" in boundary["oracle_information"]
+    assert verify_insertion_manifest(manifest) == manifest["seal"]["manifest_sha256"]
+
+
+def test_manifest_seals_keyed_shuffle_and_expanded_vocabulary(
+    tmp_path, paper_config, train_split, test_split
+):
+    config = tiny_config(paper_config)
+    settings = InsertionTrainerSettings(
+        arm="random_insertion",
+        run_id="keyed-shuffle-control",
+        max_steps=10,
+        batch_size=2,
+        device="cpu",
+        bf16=False,
+        condition_mode="keyed_shuffled_solution_hint",
+    )
+    policy = SudokuInsertionPolicy(
+        condition_model_spec(config.model, settings.condition_mode)
+    )
+    overlap = data_mod.measure_overlap(train_split, test_split)
+    manifest = build_insertion_manifest(
+        config=config,
+        settings=settings,
+        train=train_split,
+        test=test_split,
+        overlap=overlap.as_dict(),
+        policy=policy,
+        posterior=None,
+        run_dir=tmp_path / "keyed-shuffle-control",
+    )
+    boundary = manifest["mechanism_boundary"]
+    assert boundary["condition_mode"] == "keyed_shuffled_solution_hint"
+    assert "CELL_KEY_0..CELL_KEY_80" in boundary["oracle_information"]
+    assert manifest["architecture"]["policy_spec"]["vocab_size"] == 115
     assert verify_insertion_manifest(manifest) == manifest["seal"]["manifest_sha256"]
 
 

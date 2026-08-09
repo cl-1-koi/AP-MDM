@@ -98,3 +98,43 @@ visible answer information at all. A successful aligned arm would leave keyed
 reordering—not visibility—as the next mechanism to isolate. Failure after the
 full matched budget would instead show that the policy/objective ignores even a
 locally available oracle channel.
+
+## VC-1b result
+
+The aligned arm solved 256/256 held-out puzzles exactly, validly, and
+consistently at its first scheduled evaluation at update 5,000. Training digit
+accuracy was 100%, and the result remained 256/256 through update 20,000. This
+supports the refined mechanism claim: visible local translation is easy for
+this policy, while the failed transposed control lacked an addressable mapping.
+The arm continues to its declared 78,100-update endpoint for a matched learning
+curve and artifact schedule.
+
+## VC-1c keyed shuffled-answer control
+
+The next arm tests content-addressed retrieval directly. For every example, a
+fresh uniform permutation places all 81 oracle answer digits into shuffled
+physical cells. Each four-token physical cell becomes:
+
+`(partial value, shuffled answer digit, shuffled answer's cell key, query cell key)`
+
+The answer digit remains disjointly encoded as `COLOR_1..COLOR_9`. A shared
+`CELL_KEY_0..CELL_KEY_80` token occurs beside the shuffled answer and beside its
+logical destination. Thus the digit head must match equal content keys, retrieve
+the adjacent visible digit, and translate its token class. Training resamples
+the shuffle on every example presentation; evaluation samples one seeded
+shuffle per puzzle and keeps it fixed throughout that puzzle's rollout.
+
+The 324-token canvas, DDiT width/depth/heads, random insertion objective, data,
+seed, optimizer, batch size, update budget, and evaluation schedule remain
+unchanged. The necessary controlled representation change expands the embedding
+vocabulary from 34 to 115 rows (81 new cell-key tokens); no trunk or output-head
+dimensions change.
+
+- Keyed shuffled succeeds: supports the hypothesis that explicit content keys
+  explain the star task's advantage over unkeyed Sudoku retrieval.
+- Keyed shuffled fails while aligned succeeds: associative key matching is not
+  readily learned by this architecture/objective, or another star/Sudoku
+  difference is causal; proceed to key-attention and sequence-length controls.
+- The run must still reach the sealed endpoint unless a declared fail-fast
+  health condition occurs. Early success is evidence, not authorization to
+  discard its matched curve or scheduled artifacts.

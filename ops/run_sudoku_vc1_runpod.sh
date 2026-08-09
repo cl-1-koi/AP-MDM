@@ -11,7 +11,7 @@ output_dir="$2"
 source_commit="$3"
 max_steps="$4"
 case "$condition_mode" in
-  puzzle_only|aligned_solution_hint|transposed_solution_hint) ;;
+  puzzle_only|aligned_solution_hint|transposed_solution_hint|keyed_shuffled_solution_hint) ;;
   *) exit 3 ;;
 esac
 case "$max_steps" in

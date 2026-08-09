@@ -43,10 +43,18 @@ from repro.model import DDiTBlock, EmbeddingLayer, LayerNorm, Rotary, TimestepEm
 InsertionArm = Literal["fixed_ar", "random_insertion", "learned_insertion"]
 VALID_ARMS = frozenset(("fixed_ar", "random_insertion", "learned_insertion"))
 ConditionMode = Literal[
-    "puzzle_only", "aligned_solution_hint", "transposed_solution_hint"
+    "puzzle_only",
+    "aligned_solution_hint",
+    "transposed_solution_hint",
+    "keyed_shuffled_solution_hint",
 ]
 VALID_CONDITION_MODES = frozenset(
-    ("puzzle_only", "aligned_solution_hint", "transposed_solution_hint")
+    (
+        "puzzle_only",
+        "aligned_solution_hint",
+        "transposed_solution_hint",
+        "keyed_shuffled_solution_hint",
+    )
 )
 
 
@@ -69,8 +77,17 @@ def effective_model_spec(spec: ModelSpec, vocab_size: int = 34) -> ModelSpec:
     return replace(spec, vocab_size=int(vocab_size))
 
 
+def condition_model_spec(spec: ModelSpec, condition_mode: ConditionMode) -> ModelSpec:
+    """Return the runtime shape required by one conditioning control."""
+    mode = validate_condition_mode(condition_mode)
+    size = vocab.KEYED_VOCAB_SIZE if mode == "keyed_shuffled_solution_hint" else 34
+    return effective_model_spec(spec, vocab_size=size)
+
+
 def encode_partial_grids(
-    grids: torch.Tensor, solution_hints: torch.Tensor | None = None
+    grids: torch.Tensor,
+    solution_hints: torch.Tensor | None = None,
+    hint_cell_keys: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Encode ``(B,9,9)`` partial grids as the released 324-token state."""
     if grids.ndim != 3 or tuple(grids.shape[1:]) != (9, 9):
@@ -94,12 +111,36 @@ def encode_partial_grids(
         if bool(((hints < 1) | (hints > 9)).any()):
             raise ValueError("solution hints must contain digits 1..9")
         # COLOR_1..COLOR_9 are a disjoint encoding of visible oracle digits.
-        # The hint board is transposed by the caller, so the policy must both
-        # translate the token code and retrieve the digit from another cell.
+        # The caller controls whether these are aligned, transposed, or keyed
+        # and shuffled.
         tokens[:, 1::4] = vocab.COLOR_MIN + hints.reshape(batch, vocab.NUM_CELLS) - 1
-    tokens[:, 2::4] = vocab.NORMAL
-    tokens[:, 3::4] = vocab.SEPARATOR
+    if hint_cell_keys is None:
+        tokens[:, 2::4] = vocab.NORMAL
+        tokens[:, 3::4] = vocab.SEPARATOR
+    else:
+        if solution_hints is None:
+            raise ValueError("hint cell keys require solution hints")
+        if hint_cell_keys.shape != grids.shape:
+            raise ValueError("hint cell keys must match the grid shape")
+        keys = hint_cell_keys.long().reshape(batch, vocab.NUM_CELLS)
+        expected = torch.arange(vocab.NUM_CELLS, device=grids.device).expand(batch, -1)
+        if bool((keys.sort(dim=-1).values != expected).any()):
+            raise ValueError("each hint key row must be a permutation of cell ids 0..80")
+        # Each physical cell carries (value, shuffled answer, answer's key,
+        # query key).  Matching the repeated key retrieves the visible answer.
+        tokens[:, 2::4] = vocab.CELL_KEY_MIN + keys
+        tokens[:, 3::4] = vocab.CELL_KEY_MIN + expected
     return tokens
+
+
+def _sample_hint_order(
+    batch: int, device: torch.device, generator: torch.Generator
+) -> torch.Tensor:
+    """Return source-cell ids placed at each physical hint position."""
+    scores = torch.rand(
+        (batch, vocab.NUM_CELLS), device=device, generator=generator
+    )
+    return scores.argsort(dim=-1)
 
 
 def encode_posterior_targets(puzzles: torch.Tensor, solutions: torch.Tensor) -> torch.Tensor:
@@ -276,6 +317,7 @@ def _partial_states(
     solutions: torch.Tensor,
     prefix: torch.Tensor,
     condition_mode: ConditionMode = "puzzle_only",
+    hint_order: torch.Tensor | None = None,
 ) -> torch.Tensor:
     batch = puzzles.shape[0]
     values = puzzles.reshape(batch, vocab.NUM_CELLS).clone()
@@ -287,6 +329,13 @@ def _partial_states(
         hints = solutions
     elif mode == "transposed_solution_hint":
         hints = solutions.transpose(-2, -1)
+    elif mode == "keyed_shuffled_solution_hint":
+        if hint_order is None or hint_order.shape != (batch, vocab.NUM_CELLS):
+            raise ValueError("keyed shuffled hints require a (batch,81) hint order")
+        hints = solved.gather(1, hint_order).reshape(batch, 9, 9)
+        return encode_partial_grids(
+            values.reshape(batch, 9, 9), hints, hint_order.reshape(batch, 9, 9)
+        )
     return encode_partial_grids(values.reshape(batch, 9, 9), hints)
 
 
@@ -314,7 +363,14 @@ def fixed_or_random_loss(
     prefix_lengths = _sample_prefix_lengths(lengths, generator)
     prefix = _prefix_mask(order, prefix_lengths) & candidate
     next_cell = order.gather(1, prefix_lengths[:, None]).squeeze(1)
-    output = policy(_partial_states(puzzles, solutions, prefix, condition_mode))
+    hint_order = (
+        _sample_hint_order(puzzles.shape[0], puzzles.device, generator)
+        if condition_mode == "keyed_shuffled_solution_hint"
+        else None
+    )
+    output = policy(
+        _partial_states(puzzles, solutions, prefix, condition_mode, hint_order)
+    )
     batch_index = torch.arange(puzzles.shape[0], device=puzzles.device)
     next_logits = output["digit_logits"][batch_index, next_cell]
     target = solutions.reshape(puzzles.shape[0], -1)[batch_index, next_cell] - 1
@@ -383,12 +439,15 @@ def _exact_next_elbo(
     candidate: torch.Tensor,
     prefix: torch.Tensor,
     condition_mode: ConditionMode,
+    hint_order: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
     """Compute the exact inner expectation over the next unfilled cell."""
     remaining = candidate & ~prefix
     if bool((remaining.sum(dim=-1) <= 0).any()):
         raise ValueError("prefix must leave at least one cell for the exact next-step sum")
-    output = policy(_partial_states(puzzles, solutions, prefix, condition_mode))
+    output = policy(
+        _partial_states(puzzles, solutions, prefix, condition_mode, hint_order)
+    )
     q_log_prob = F.log_softmax(q_logits.masked_fill(~remaining, -torch.inf), dim=-1)
     q_prob = q_log_prob.exp()
     p_cell_log_prob = F.log_softmax(
@@ -436,6 +495,11 @@ def learned_insertion_loss(
     orders = _sample_plackett_luce_orders(
         q_logits, candidate, rloo_samples, generator
     )
+    hint_order = (
+        _sample_hint_order(puzzles.shape[0], puzzles.device, generator)
+        if condition_mode == "keyed_shuffled_solution_hint"
+        else None
+    )
 
     prefix_log_q = []
     f_values = []
@@ -445,7 +509,14 @@ def learned_insertion_loss(
             q_logits, candidate, orders[sample_index], prefix_lengths
         )
         f_value, diagnostics = _exact_next_elbo(
-            policy, puzzles, solutions, q_logits, candidate, prefix, condition_mode
+            policy,
+            puzzles,
+            solutions,
+            q_logits,
+            candidate,
+            prefix,
+            condition_mode,
+            hint_order,
         )
         prefix_log_q.append(log_q)
         f_values.append(f_value)
@@ -520,19 +591,31 @@ def solve_monotone(
     grids = torch.as_tensor(arr, dtype=torch.long, device=device).clone()
     mode = validate_condition_mode(condition_mode)
     hint_tensor = None
-    if mode in ("aligned_solution_hint", "transposed_solution_hint"):
+    if mode in (
+        "aligned_solution_hint",
+        "transposed_solution_hint",
+        "keyed_shuffled_solution_hint",
+    ):
         if solutions is None:
             raise ValueError(f"{mode} requires oracle solutions")
         solution_array = np.array(solutions, dtype=np.uint8, copy=True)
         if solution_array.shape != arr.shape:
             raise ValueError("oracle solutions must match the puzzle batch shape")
-        hint_values = (
-            solution_array
-            if mode == "aligned_solution_hint"
-            else solution_array.transpose(0, 2, 1)
-        )
-        hint_tensor = torch.as_tensor(hint_values, dtype=torch.long, device=device)
+        if mode != "keyed_shuffled_solution_hint":
+            hint_values = (
+                solution_array
+                if mode == "aligned_solution_hint"
+                else solution_array.transpose(0, 2, 1)
+            )
+            hint_tensor = torch.as_tensor(hint_values, dtype=torch.long, device=device)
     generator = torch.Generator(device=device).manual_seed(int(seed))
+    hint_order = None
+    if mode == "keyed_shuffled_solution_hint":
+        hint_order = _sample_hint_order(grids.shape[0], device, generator)
+        solved = torch.as_tensor(solution_array, dtype=torch.long, device=device).reshape(
+            grids.shape[0], vocab.NUM_CELLS
+        )
+        hint_tensor = solved.gather(1, hint_order).reshape(-1, 9, 9)
     steps = torch.zeros(grids.shape[0], dtype=torch.long, device=device)
     policy.eval()
 
@@ -541,7 +624,13 @@ def solve_monotone(
         active = empty.any(dim=-1)
         if not bool(active.any()):
             break
-        output = policy(encode_partial_grids(grids, hint_tensor))
+        output = policy(
+            encode_partial_grids(
+                grids,
+                hint_tensor,
+                hint_order.reshape(-1, 9, 9) if hint_order is not None else None,
+            )
+        )
         if arm == "fixed_ar":
             cell = empty.to(torch.int64).argmax(dim=-1)
         elif arm == "random_insertion":

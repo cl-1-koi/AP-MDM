@@ -13,6 +13,7 @@ from repro.insertion import (
     SudokuInsertionPolicy,
     SudokuOrderPosterior,
     default_posterior_spec,
+    condition_model_spec,
     effective_model_spec,
     encode_partial_grids,
     encode_posterior_targets,
@@ -86,6 +87,23 @@ def test_aligned_solution_hint_exposes_relabelled_digit_at_constant_offset():
     assert torch.equal(colors, vocab.COLOR_MIN + solutions - 1)
 
 
+def test_keyed_shuffled_hint_exposes_repeated_content_keys():
+    puzzles, solutions = batch_pair(2)
+    orders = torch.stack((torch.arange(80, -1, -1), torch.randperm(81)))
+    hints = solutions.reshape(2, 81).gather(1, orders).reshape(2, 9, 9)
+    encoded = encode_partial_grids(puzzles, hints, orders.reshape(2, 9, 9))
+    colors = encoded[:, 1::4]
+    hint_keys = encoded[:, 2::4]
+    query_keys = encoded[:, 3::4]
+    assert torch.equal(colors, vocab.COLOR_MIN + hints.reshape(2, 81) - 1)
+    assert torch.equal(hint_keys, vocab.CELL_KEY_MIN + orders)
+    assert torch.equal(
+        query_keys,
+        vocab.CELL_KEY_MIN + torch.arange(81).expand(2, -1),
+    )
+    assert int(encoded.max()) < vocab.KEYED_VOCAB_SIZE
+
+
 @pytest.mark.parametrize("arm", ["fixed_ar", "random_insertion"])
 def test_nonlearned_order_loss_is_finite_and_trains_digit_head(arm):
     puzzles, solutions = batch_pair()
@@ -114,6 +132,24 @@ def test_oracle_hint_random_insertion_loss_is_finite():
     assert torch.isfinite(result.loss)
 
 
+def test_keyed_shuffled_hint_random_insertion_loss_is_finite():
+    puzzles, solutions = batch_pair()
+    spec = condition_model_spec(tiny_spec(), "keyed_shuffled_solution_hint")
+    model = SudokuInsertionPolicy(spec)
+    generator = torch.Generator().manual_seed(19)
+    result = fixed_or_random_loss(
+        model,
+        puzzles,
+        solutions,
+        "random_insertion",
+        generator,
+        condition_mode="keyed_shuffled_solution_hint",
+    )
+    assert torch.isfinite(result.loss)
+    result.loss.backward()
+    assert model.trunk.vocab_embed.embedding.grad is not None
+
+
 def test_learned_permutation_elbo_reaches_policy_and_posterior():
     puzzles, solutions = batch_pair(4)
     policy = SudokuInsertionPolicy(tiny_spec())
@@ -135,6 +171,11 @@ def test_learned_permutation_elbo_reaches_policy_and_posterior():
 def test_runtime_spec_records_tokenizer_expansion():
     spec = effective_model_spec(tiny_spec(), vocab_size=34)
     assert spec.vocab_size == 34
+
+
+def test_keyed_condition_expands_embedding_for_81_cell_ids():
+    spec = condition_model_spec(tiny_spec(), "keyed_shuffled_solution_hint")
+    assert spec.vocab_size == vocab.KEYED_VOCAB_SIZE == 115
 
 
 class PerfectScriptedPolicy(nn.Module):

@@ -308,7 +308,7 @@ def cmd_insertion_manifest(args: argparse.Namespace) -> int:
         SudokuInsertionPolicy,
         SudokuOrderPosterior,
         default_posterior_spec,
-        effective_model_spec,
+        condition_model_spec,
     )
     from repro.insertion_trainer import build_insertion_manifest
 
@@ -320,7 +320,9 @@ def cmd_insertion_manifest(args: argparse.Namespace) -> int:
     overlap = data_mod.measure_overlap(train, test)
     data_mod.assert_no_leakage(overlap)
     torch.manual_seed(settings.seed)
-    policy = SudokuInsertionPolicy(effective_model_spec(cfg.model))
+    policy = SudokuInsertionPolicy(
+        condition_model_spec(cfg.model, settings.condition_mode)
+    )
     posterior = (
         SudokuOrderPosterior(default_posterior_spec(policy.spec))
         if settings.arm == "learned_insertion"
@@ -799,6 +801,7 @@ def build_parser() -> argparse.ArgumentParser:
             "puzzle_only",
             "aligned_solution_hint",
             "transposed_solution_hint",
+            "keyed_shuffled_solution_hint",
         ),
         default="puzzle_only",
     )

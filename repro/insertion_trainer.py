@@ -23,7 +23,7 @@ from repro.insertion import (
     SudokuInsertionPolicy,
     SudokuOrderPosterior,
     default_posterior_spec,
-    effective_model_spec,
+    condition_model_spec,
     fixed_or_random_loss,
     learned_insertion_loss,
     solve_monotone,
@@ -116,6 +116,8 @@ def build_insertion_manifest(
                 if settings.condition_mode == "aligned_solution_hint"
                 else "the complete solution is exposed through COLOR_1..COLOR_9 on the transposed board; this is an intentional retrieval/reordering control"
                 if settings.condition_mode == "transposed_solution_hint"
+                else "the complete solution is independently shuffled per example; shared CELL_KEY_0..CELL_KEY_80 tokens identify each hint and its query destination"
+                if settings.condition_mode == "keyed_shuffled_solution_hint"
                 else None
             ),
             "learned_insertion": (
@@ -149,6 +151,7 @@ def build_insertion_manifest(
                 for name in (
                     "repro/insertion.py",
                     "repro/insertion_trainer.py",
+                    "repro/vocab.py",
                     "repro/cli.py",
                     "repro/model.py",
                     "repro/data.py",
@@ -261,7 +264,7 @@ class InsertionTrainer:
         )
         self.seeds = seed_everything(settings.seed)
         self.generator = torch.Generator(device=self.device).manual_seed(settings.seed + 17)
-        policy_spec = effective_model_spec(config.model)
+        policy_spec = condition_model_spec(config.model, settings.condition_mode)
         self.policy = SudokuInsertionPolicy(policy_spec).to(self.device)
         self.posterior = (
             SudokuOrderPosterior(default_posterior_spec(policy_spec)).to(self.device)
