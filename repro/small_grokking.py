@@ -37,6 +37,8 @@ from repro.trainer import constant_schedule_with_warmup, seed_everything
 
 Arm = Literal["fo_arm", "ao_arm", "lo_arm", "mdm"]
 ARMS = frozenset(("fo_arm", "ao_arm", "lo_arm", "mdm"))
+TargetMode = Literal["sudoku_solution", "random_payload"]
+TARGET_MODES = frozenset(("sudoku_solution", "random_payload"))
 SIZE = 4
 BOX_ROWS = BOX_COLS = 2
 CELLS = SIZE * SIZE
@@ -179,6 +181,66 @@ def frozen_splits(seed: int = 42) -> tuple[S4Split, S4Split, dict[str, Any]]:
     if overlap["solution_overlap"] or overlap["puzzle_overlap"]:
         raise AssertionError("S4 split overlap")
     return train, test, overlap
+
+
+def apply_target_mode(
+    train: S4Split,
+    test: S4Split,
+    *,
+    mode: TargetMode,
+    seed: int,
+) -> tuple[S4Split, S4Split, dict[str, Any]]:
+    """Choose the target carried by the keyed payload channel.
+
+    ``random_payload`` is the D1 shortcut-removal control.  Every blank-cell
+    target is sampled independently and uniformly from 1..4, while the six
+    immutable givens retain their puzzle digits.  Thus rollout exactness is
+    well-defined without asking the policy to overwrite givens, and Sudoku
+    validity is intentionally no longer the primary outcome.
+    """
+    if mode not in TARGET_MODES:
+        raise ValueError(f"unknown target mode {mode}")
+    if mode == "sudoku_solution":
+        return train, test, {
+            "mode": mode,
+            "seed": None,
+            "primary_outcome": "exact valid Sudoku solution",
+        }
+
+    payload_seed = int(seed) + 2_000_003
+    generator = np.random.default_rng(payload_seed)
+
+    def replace(split: S4Split) -> S4Split:
+        targets = generator.integers(
+            DIGIT_MIN,
+            DIGIT_MAX + 1,
+            size=split.solutions.shape,
+            dtype=np.uint8,
+        )
+        given = split.puzzles != EMPTY
+        targets[given] = split.puzzles[given]
+        return S4Split(np.array(split.puzzles, copy=True), targets)
+
+    random_train = replace(train)
+    random_test = replace(test)
+    train_blank = train.puzzles == EMPTY
+    test_blank = test.puzzles == EMPTY
+    return random_train, random_test, {
+        "mode": mode,
+        "seed": payload_seed,
+        "primary_outcome": "exact following of visible keyed random blank-cell payloads",
+        "givens_are_immutable": True,
+        "train_blank_cells": int(train_blank.sum()),
+        "heldout_blank_cells": int(test_blank.sum()),
+        "train_target_sha256": sha256_array(random_train.solutions),
+        "heldout_target_sha256": sha256_array(random_test.solutions),
+        "train_target_sudoku_match_rate": float(
+            (random_train.solutions[train_blank] == train.solutions[train_blank]).mean()
+        ),
+        "heldout_target_sudoku_match_rate": float(
+            (random_test.solutions[test_blank] == test.solutions[test_blank]).mean()
+        ),
+    }
 
 
 def encode_state(
@@ -794,6 +856,8 @@ class Settings:
     bf16: bool
     log_every: int
     eval_steps: tuple[int, ...]
+    target_mode: TargetMode
+    early_stop_payload_exact_rate: float | None
 
 
 def run(settings: Settings) -> dict[str, Any]:
@@ -805,7 +869,13 @@ def run(settings: Settings) -> dict[str, Any]:
     if _git("status", "--porcelain"):
         raise RuntimeError("refusing to run from a dirty worktree")
     output.mkdir(parents=True)
-    train, test, overlap = frozen_splits(settings.seed)
+    sudoku_train, sudoku_test, overlap = frozen_splits(settings.seed)
+    train, test, target_contract = apply_target_mode(
+        sudoku_train,
+        sudoku_test,
+        mode=settings.target_mode,
+        seed=settings.seed,
+    )
     device = torch.device(
         settings.device
         if settings.device != "cuda" or torch.cuda.is_available()
@@ -829,7 +899,11 @@ def run(settings: Settings) -> dict[str, Any]:
     scheduler = constant_schedule_with_warmup(optimizer, settings.warmup_steps)
     manifest_content = {
         "schema": "apmdm/s4-grokking-manifest-v1",
-        "experiment": "S4 fixed-canvas grokking phase diagram",
+        "experiment": (
+            "S4 random-payload keyed-retrieval control"
+            if settings.target_mode == "random_payload"
+            else "S4 fixed-canvas grokking phase diagram"
+        ),
         "settings": asdict(settings),
         "mechanism": {
             "arm": settings.arm,
@@ -838,7 +912,14 @@ def run(settings: Settings) -> dict[str, Any]:
             "learned_order": settings.arm == "lo_arm",
             "masked_diffusion": settings.arm == "mdm",
         },
-        "data": {"train": train.provenance(), "test": test.provenance(), "overlap": overlap},
+        "data": {
+            "target_contract": target_contract,
+            "base_sudoku_train": sudoku_train.provenance(),
+            "base_sudoku_test": sudoku_test.provenance(),
+            "train": train.provenance(),
+            "test": test.provenance(),
+            "overlap": overlap,
+        },
         "architecture": {
             "policy_signature": policy.signature(),
             "policy_spec": spec.as_dict(),
@@ -877,6 +958,7 @@ def run(settings: Settings) -> dict[str, Any]:
     started = window_started = time.time()
     window_examples = 0
     evaluations = []
+    stop_reason = None
     try:
         for step in range(1, settings.max_steps + 1):
             policy.train()
@@ -952,13 +1034,25 @@ def run(settings: Settings) -> dict[str, Any]:
                         "diagnostics_path": str(diagnostics_path),
                         "diagnostics_sha256": _sha(diagnostics_path),
                         "payload_accuracy": diagnostics["keyed_solution"]["payload_accuracy"],
+                        "payload_exact_rate": diagnostics["keyed_solution"]["payload_exact_rate"],
                         "counterfactual_payload_accuracy": diagnostics["keyed_counterfactual"]["payload_accuracy"],
+                        "counterfactual_payload_exact_rate": diagnostics["keyed_counterfactual"]["payload_exact_rate"],
                         "counterfactual_solution_accuracy": diagnostics["keyed_counterfactual"]["solution_accuracy"],
                         "key_ablation_delta": diagnostics["key_ablation_delta"],
                         "hint_ablation_delta": diagnostics["hint_ablation_delta"],
                     }
                     telemetry.write("eval", **event)
                     evaluations.append(event)
+                    if (
+                        split_name == "heldout"
+                        and settings.early_stop_payload_exact_rate is not None
+                        and event["payload_exact_rate"]
+                        >= settings.early_stop_payload_exact_rate
+                    ):
+                        stop_reason = (
+                            "heldout_payload_exact_rate"
+                            f">={settings.early_stop_payload_exact_rate}"
+                        )
                 checkpoint = {
                     "version": 1, "step": step, "arm": settings.arm,
                     "manifest_sha256": manifest["seal"]["manifest_sha256"],
@@ -974,8 +1068,12 @@ def run(settings: Settings) -> dict[str, Any]:
                 telemetry.write(
                     "checkpoint", step=step, path=str(checkpoint_path), sha256=_sha(checkpoint_path)
                 )
+                if stop_reason is not None:
+                    break
         summary = {
-            "completed": True, "end_step": settings.max_steps,
+            "completed": True,
+            "end_step": step,
+            "stop_reason": stop_reason or "max_steps",
             "wall_seconds": time.time() - started, "evaluations": evaluations,
         }
         _write_json(output / "train_summary.json", summary)
@@ -991,7 +1089,7 @@ def run(settings: Settings) -> dict[str, Any]:
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "source_commit": manifest["code"]["commit"],
         "manifest_sha256": manifest["seal"]["manifest_sha256"],
-        "arm": settings.arm, "step": settings.max_steps, "files": files,
+        "arm": settings.arm, "step": step, "files": files,
     }
     _write_json(output / "completion.json", completion)
     return completion
@@ -1021,6 +1119,8 @@ def main() -> None:
     parser.add_argument("--bf16", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--eval-steps", default="1000,3000,10000,30000,100000,300000,1000000")
+    parser.add_argument("--target-mode", choices=sorted(TARGET_MODES), default="sudoku_solution")
+    parser.add_argument("--early-stop-payload-exact-rate", type=float)
     args = parser.parse_args()
     settings = Settings(
         arm=args.arm, output=args.output, max_steps=args.max_steps,
@@ -1030,6 +1130,8 @@ def main() -> None:
         seed=args.seed, device=args.device, bf16=args.bf16,
         log_every=args.log_every,
         eval_steps=parse_eval_steps(args.eval_steps, args.max_steps),
+        target_mode=args.target_mode,
+        early_stop_payload_exact_rate=args.early_stop_payload_exact_rate,
     )
     print(json.dumps(run(settings), sort_keys=True))
 

@@ -12,6 +12,7 @@ from repro.small_grokking import (
     SEQUENCE_LENGTH,
     S4Policy,
     S4Posterior,
+    apply_target_mode,
     all_solutions,
     count_solutions,
     counterfactual_payloads,
@@ -46,6 +47,37 @@ def test_keyed_state_repeats_each_content_key():
     assert tokens.shape == (2, SEQUENCE_LENGTH)
     assert torch.equal(tokens[:, 2::4], KEY_MIN + order)
     assert torch.equal(tokens[:, 3::4], KEY_MIN + torch.arange(CELLS).expand(2, -1))
+
+
+def test_random_payload_mode_is_deterministic_and_preserves_givens():
+    train, test, _ = frozen_splits(42)
+    random_train, random_test, contract = apply_target_mode(
+        train, test, mode="random_payload", seed=42
+    )
+    repeated_train, repeated_test, repeated_contract = apply_target_mode(
+        train, test, mode="random_payload", seed=42
+    )
+    assert contract == repeated_contract
+    assert np.array_equal(random_train.solutions, repeated_train.solutions)
+    assert np.array_equal(random_test.solutions, repeated_test.solutions)
+    for base, random_split in ((train, random_train), (test, random_test)):
+        given = base.puzzles != 0
+        blank = ~given
+        assert np.array_equal(random_split.solutions[given], base.puzzles[given])
+        assert 1 <= int(random_split.solutions[blank].min())
+        assert int(random_split.solutions[blank].max()) <= 4
+        # The random blank targets are not merely the Sudoku completion.
+        assert float((random_split.solutions[blank] == base.solutions[blank]).mean()) < 0.35
+
+
+def test_solution_target_mode_is_identity():
+    train, test, _ = frozen_splits(42)
+    selected_train, selected_test, contract = apply_target_mode(
+        train, test, mode="sudoku_solution", seed=42
+    )
+    assert selected_train is train
+    assert selected_test is test
+    assert contract["mode"] == "sudoku_solution"
 
 
 @pytest.mark.parametrize("arm", ["fo_arm", "ao_arm"])
