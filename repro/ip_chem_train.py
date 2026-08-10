@@ -94,6 +94,17 @@ def _write_jsonl(path: Path, rows: list[dict[str, object]]) -> str:
     return file_digest(path)
 
 
+def _artifact_reference(path: Path) -> dict[str, object]:
+    """Signed regular-file reference consumed by the closure auditor."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"artifact is not a regular file: {path}")
+    return {
+        "path": str(path),
+        "bytes": path.stat().st_size,
+        "sha256": file_digest(path),
+    }
+
+
 def _seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -408,23 +419,57 @@ def train(settings: ChemTrainSettings) -> dict:
             )
         final_rows_path = evaluations / "final_samples.jsonl"
         final_rows_sha256 = _write_jsonl(final_rows_path, final_rows)
-        completion = {
-            "schema": "ip/guacamol-completion-v1",
-            "completed": True,
-            "arm": settings.arm,
-            "step": step,
-            "metrics": final_metrics,
-            "samples": {"path": str(final_rows_path), "sha256": final_rows_sha256},
-            "checkpoint": {
-                "path": str(checkpoints / f"step_{step:08d}.pt"),
-                "sha256": file_digest(checkpoints / f"step_{step:08d}.pt"),
-            },
-            "manifest": {"path": str(output / "manifest.json"), "sha256": file_digest(output / "manifest.json")},
-            "telemetry": {"path": str(telemetry_path)},
-            "elapsed_s": time.perf_counter() - started,
-        }
-        _atomic_json(output / "completion.json", completion)
-        telemetry.write("complete", **completion)
+        telemetry.write(
+            "training_finished",
+            step=step,
+            final_samples_path=str(final_rows_path),
+            final_samples_sha256=final_rows_sha256,
+            **final_metrics,
+        )
+
+    expected_checkpoint_steps = list(
+        range(settings.checkpoint_every, settings.max_steps + 1, settings.checkpoint_every)
+    )
+    if not expected_checkpoint_steps or expected_checkpoint_steps[-1] != settings.max_steps:
+        expected_checkpoint_steps.append(settings.max_steps)
+    checkpoint_paths = sorted(checkpoints.glob("step_*.pt"))
+    actual_checkpoint_steps = [int(path.stem.split("_")[-1]) for path in checkpoint_paths]
+    if actual_checkpoint_steps != expected_checkpoint_steps:
+        raise RuntimeError(
+            f"checkpoint closure mismatch: {actual_checkpoint_steps} != {expected_checkpoint_steps}"
+        )
+    evaluation_paths = sorted(evaluations.glob("*.jsonl"))
+    expected_step_evaluations = len(
+        list(range(settings.eval_every, settings.max_steps + 1, settings.eval_every))
+    )
+    if settings.max_steps % settings.eval_every:
+        expected_step_evaluations += 1
+    expected_evaluation_count = expected_step_evaluations + 1  # final_samples.jsonl
+    if len(evaluation_paths) != expected_evaluation_count:
+        raise RuntimeError(
+            f"evaluation closure mismatch: {len(evaluation_paths)} != {expected_evaluation_count}"
+        )
+    completion = {
+        "schema": "ip/guacamol-completion-v1",
+        "completed": True,
+        "arm": settings.arm,
+        "step": step,
+        "metrics": final_metrics,
+        "artifact_contract": {
+            "expected_checkpoint_steps": expected_checkpoint_steps,
+            "actual_checkpoint_steps": actual_checkpoint_steps,
+            "expected_evaluation_count": expected_evaluation_count,
+            "actual_evaluation_count": len(evaluation_paths),
+        },
+        "artifacts": {
+            "manifest": _artifact_reference(output / "manifest.json"),
+            "telemetry": _artifact_reference(telemetry_path),
+            "checkpoints": [_artifact_reference(path) for path in checkpoint_paths],
+            "evaluations": [_artifact_reference(path) for path in evaluation_paths],
+        },
+        "elapsed_s": time.perf_counter() - started,
+    }
+    _atomic_json(output / "completion.json", completion)
     return completion
 
 
