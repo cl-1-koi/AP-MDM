@@ -36,9 +36,17 @@ def sha256(path: Path) -> str:
 
 
 def command(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args, capture_output=True, text=True, check=False, timeout=timeout
-    )
+    try:
+        return subprocess.run(
+            args, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=124,
+            stdout="",
+            stderr=f"command timed out after {timeout} seconds; will retry next cycle",
+        )
 
 
 def ssh_args(pod: dict[str, Any]) -> list[str]:
@@ -79,7 +87,7 @@ def sync_and_verify(pod: dict[str, Any], workload: dict[str, Any]) -> dict[str, 
             f"ssh -i {pod['ssh_key']} -p {pod['port']} -o BatchMode=yes",
             source, str(local) + "/",
         ],
-        timeout=300,
+        timeout=1800,
     )
     if result.returncode:
         return {"verified": False, "error": result.stderr.strip()[-1000:]}
