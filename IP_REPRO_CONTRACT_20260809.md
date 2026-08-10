@@ -94,6 +94,19 @@ label. The paper reports, for classifier-terminated IP, 97.4% validity, 97.3%
 valid+unique, 95.6% valid+unique+novel, 97.2 normalized KL, and 89.2 normalized
 FCD.
 
+Execution amendment (2026-08-10): G1 learned IP reached 80.7% exact versus the
+paper's 83.0%, so G2 is open. The official GuacaMol v1 files are authenticated
+against BenevolentAI's published MD5 values. G2 begins with capacity-matched
+FO-ARM, classifier-terminated AO-IP, and classifier-terminated learned-IP
+curves. Because the paper omits model widths/heads, batch size, tokenizer,
+maximum length, training duration, seeds, and hardware, these arms are labeled
+reconstructions. The shared declared capacity is an 18-layer, width-256,
+8-head decoder and, for learned IP, a 3-layer, width-128, 4-head posterior.
+The first gate tests validity, valid+unique, valid+unique+novel, termination,
+and emergence of the reported scaffold-before-atoms insertion schedule before
+authorizing convergence-scale training and the official 10,000-sample KL/FCD
+panel.
+
 ## Stop conditions
 
 - Stop and repair on any G0 gradient/marginal mismatch.
