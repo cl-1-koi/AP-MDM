@@ -107,6 +107,22 @@ and emergence of the reported scaffold-before-atoms insertion schedule before
 authorizing convergence-scale training and the official 10,000-sample KL/FCD
 panel.
 
+Continuation amendment (2026-08-10): the 20,000-update curves were only about
+one GuacaMol epoch. Their sealed 1,000-sample panels reached 19.1% validity for
+FO-ARM, 43.4% for AO-IP, and 41.8% for learned IP. Although learned IP did not
+beat AO-IP at this early gate, the owner prioritizes approximate recovery of
+the paper's converged performance over a clean cold-start comparison. Continue
+all three exact 20k parents for 80,000 additional updates (about four epochs)
+after one declared Ash--Adams shrink-and-perturb restart: initialize the decoder
+from its EMA weights, initialize the learned posterior from its trained raw
+weights, apply lambda=0.95 and Gaussian sigma=0.005 to all trainable parameters,
+discard AdamW moments, reset decoder EMA from the transformed weights, and run
+a new 1,000-update warmup plus cosine schedule over the 80k continuation. Save
+absolute-step checkpoints at 40k, 60k, 80k, and 100k; evaluate 512 samples every
+10k and 2,000 samples at completion. This is deliberately a warm-restart
+performance-seeking continuation, not an unbiased comparison with training the
+same schedule from scratch.
+
 ## Stop conditions
 
 - Stop and repair on any G0 gradient/marginal mismatch.

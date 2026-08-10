@@ -64,6 +64,7 @@ HASHED_SOURCES: List[str] = [
     "repro/ip_chem_eval.py",
     "repro/ip_chem_model.py",
     "repro/ip_chem_train.py",
+    "ops/run_ip_chem_continue_runpod.sh",
     "repro/ip_star_data.py",
     "repro/ip_star_eval.py",
     "repro/ip_star_eval_checkpoint.py",

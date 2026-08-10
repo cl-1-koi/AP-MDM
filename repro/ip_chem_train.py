@@ -66,12 +66,30 @@ class ChemTrainSettings:
     decoder_spec: TransformerSpec = CHEM_DECODER_SPEC
     posterior_spec: TransformerSpec = CHEM_POSTERIOR_SPEC
     resume: str | None = None
+    shrink_lambda: float = 1.0
+    perturb_sigma: float = 0.0
+    reset_optimizer_on_resume: bool = False
+    restart_schedule_on_resume: bool = False
+    resume_decoder_from_ema: bool = False
 
     def __post_init__(self) -> None:
         if self.arm not in ("fixed", "random", "learned"):
             raise ValueError(f"unknown chemistry arm: {self.arm}")
         if min(self.max_steps, self.batch_size, self.eval_samples) < 1:
             raise ValueError("step, batch, and evaluation counts must be positive")
+        if not 0.0 <= self.shrink_lambda <= 1.0:
+            raise ValueError("shrink lambda must be in [0, 1]")
+        if self.perturb_sigma < 0.0:
+            raise ValueError("perturb sigma must be non-negative")
+        restart_requested = (
+            self.shrink_lambda != 1.0
+            or self.perturb_sigma != 0.0
+            or self.reset_optimizer_on_resume
+            or self.restart_schedule_on_resume
+            or self.resume_decoder_from_ema
+        )
+        if restart_requested and not self.resume:
+            raise ValueError("restart controls require --resume")
 
 
 def _git(*arguments: str) -> str | None:
@@ -117,12 +135,64 @@ def _parameter_count(module: torch.nn.Module | None) -> int:
     return 0 if module is None else sum(parameter.numel() for parameter in module.parameters())
 
 
+def _scheduled_steps_after(start_step: int, stop_step: int, interval: int) -> list[int]:
+    """Return scheduled absolute steps strictly after a resumed parent."""
+    first = ((start_step // interval) + 1) * interval
+    steps = list(range(first, stop_step + 1, interval))
+    if not steps or steps[-1] != stop_step:
+        steps.append(stop_step)
+    return steps
+
+
+@torch.no_grad()
+def _shrink_and_perturb(
+    modules: list[torch.nn.Module],
+    *,
+    shrink_lambda: float,
+    perturb_sigma: float,
+    seed: int,
+) -> dict[str, float | int]:
+    """Apply the declared one-shot Ash--Adams warm-start transform."""
+    before_squared = 0.0
+    after_squared = 0.0
+    perturb_squared = 0.0
+    parameters = 0
+    for module_index, module in enumerate(modules):
+        generator = torch.Generator(device=next(module.parameters()).device).manual_seed(
+            seed + 104_729 * module_index
+        )
+        for parameter in module.parameters():
+            if not parameter.requires_grad or not parameter.is_floating_point():
+                continue
+            before_squared += float(parameter.float().square().sum())
+            noise = torch.randn(
+                parameter.shape,
+                generator=generator,
+                device=parameter.device,
+                dtype=parameter.dtype,
+            ) * perturb_sigma
+            perturb_squared += float(noise.float().square().sum())
+            parameter.mul_(shrink_lambda).add_(noise)
+            after_squared += float(parameter.float().square().sum())
+            parameters += parameter.numel()
+    return {
+        "parameters": parameters,
+        "before_l2": math.sqrt(before_squared),
+        "after_l2": math.sqrt(after_squared),
+        "perturb_l2": math.sqrt(perturb_squared),
+        "shrink_lambda": shrink_lambda,
+        "perturb_sigma": perturb_sigma,
+        "seed": seed,
+    }
+
+
 def _manifest(
     settings: ChemTrainSettings,
     tokenizer: SmilesTokenizer,
     split_records: dict[str, dict[str, object]],
     decoder: ChemInsertionDecoder,
     posterior: ChemInsertionPosterior | None,
+    restart: dict[str, object] | None = None,
 ) -> dict:
     paper_pdf = Path("/home/ubuntu/papers/2606.02133/2606.02133v3.pdf")
     paper_source = Path("/home/ubuntu/papers/2606.02133/2606.02133v3-source.tar")
@@ -155,6 +225,7 @@ def _manifest(
                     "repro/ip_chem_data.py", "repro/ip_chem_model.py",
                     "repro/ip_chem_eval.py", "repro/ip_chem_train.py",
                     "ops/run_ip_chem_runpod.sh",
+                    "ops/run_ip_chem_continue_runpod.sh",
                 )
             },
         },
@@ -174,6 +245,7 @@ def _manifest(
             "objective": "permutation ELBO; M=2 RLOO for learned posterior",
             "declared_dimensions_not_from_paper": True,
         },
+        "restart": restart,
         "evaluation": {
             "decoding": "search-free ancestral sampling, temperature 1",
             "smoke_samples": settings.eval_samples,
@@ -321,22 +393,82 @@ def train(settings: ChemTrainSettings) -> dict:
     ema = ExponentialMovingAverage(decoder, settings.ema_decay, 0)
     objective_generator = torch.Generator(device=device).manual_seed(settings.seed + 17)
     step = 0
+    start_step = 0
+    parent_reference: dict[str, object] | None = None
+    restart_record: dict[str, object] | None = None
     if settings.resume:
-        state = torch.load(settings.resume, map_location=device, weights_only=False)
+        parent_path = Path(settings.resume).resolve()
+        parent_reference = _artifact_reference(parent_path)
+        state = torch.load(parent_path, map_location=device, weights_only=False)
+        if state.get("schema") != "ip/guacamol-checkpoint-v1":
+            raise ValueError(f"unsupported chemistry parent checkpoint: {state.get('schema')}")
+        parent_arm = state.get("settings", {}).get("arm")
+        if parent_arm != settings.arm:
+            raise ValueError(f"parent arm {parent_arm!r} does not match {settings.arm!r}")
         decoder.load_state_dict(state["decoder"])
+        if settings.resume_decoder_from_ema:
+            decoder.load_state_dict(state["ema"]["shadow"])
         if posterior is not None:
             posterior.load_state_dict(state["posterior"])
-        optimizer.load_state_dict(state["optimizer"])
-        ema.load_state_dict(state["ema"])
         objective_generator.set_state(state["objective_generator_rng"].cpu())
         step = int(state["step"])
-    manifest = _manifest(settings, tokenizer, split_records, decoder, posterior)
+        start_step = step
+        if settings.max_steps <= start_step:
+            raise ValueError(
+                f"continuation max_steps={settings.max_steps} must exceed parent step={start_step}"
+            )
+        transform_requested = (
+            settings.shrink_lambda != 1.0 or settings.perturb_sigma != 0.0
+        )
+        transform = None
+        if transform_requested:
+            modules = [decoder] + ([posterior] if posterior is not None else [])
+            transform = _shrink_and_perturb(
+                modules,
+                shrink_lambda=settings.shrink_lambda,
+                perturb_sigma=settings.perturb_sigma,
+                seed=settings.seed + 2_026_081,
+            )
+        if settings.reset_optimizer_on_resume:
+            optimizer_reset = True
+        else:
+            optimizer.load_state_dict(state["optimizer"])
+            optimizer_reset = False
+        if transform_requested:
+            # The old EMA lives in the pre-transform basin. Seed a new EMA from
+            # the transformed decoder so evaluations measure the continued arm.
+            ema = ExponentialMovingAverage(decoder, settings.ema_decay, 0)
+            ema.initialized = True
+            ema_reset = True
+        else:
+            ema.load_state_dict(state["ema"])
+            ema_reset = False
+        restart_record = {
+            "parent": parent_reference,
+            "parent_step": start_step,
+            "transform": transform,
+            "optimizer_reset": optimizer_reset,
+            "ema_reset": ema_reset,
+            "schedule_restarted": settings.restart_schedule_on_resume,
+            "decoder_source": "parent_ema" if settings.resume_decoder_from_ema else "parent_raw",
+            "continuation_updates": settings.max_steps - start_step,
+        }
+    manifest = _manifest(
+        settings, tokenizer, split_records, decoder, posterior, restart_record
+    )
     _atomic_json(output / "manifest.json", manifest)
     started = time.perf_counter()
     optimizer.zero_grad(set_to_none=True)
     telemetry_path = output / "telemetry.jsonl"
     with TelemetryWriter(telemetry_path, output.name) as telemetry:
-        epoch = step // max(len(train_rows) // settings.batch_size, 1)
+        if restart_record is not None:
+            telemetry.write(
+                "restart",
+                step=start_step,
+                **restart_record,
+            )
+        steps_per_epoch = max(len(train_rows) // settings.batch_size, 1)
+        epoch = step // steps_per_epoch
         while step < settings.max_steps:
             for selected in _batches(train_rows, settings.batch_size, settings.seed, epoch):
                 if step >= settings.max_steps:
@@ -355,7 +487,15 @@ def train(settings: ChemTrainSettings) -> dict:
                 )
                 grad_norm = torch.nn.utils.clip_grad_norm_(parameters, 1.0)
                 step += 1
-                multiplier = _lr_multiplier(step, settings.warmup_steps, settings.max_steps)
+                if settings.restart_schedule_on_resume:
+                    schedule_step = step - start_step
+                    schedule_total = settings.max_steps - start_step
+                else:
+                    schedule_step = step
+                    schedule_total = settings.max_steps
+                multiplier = _lr_multiplier(
+                    schedule_step, settings.warmup_steps, schedule_total
+                )
                 for index, group in enumerate(optimizer.param_groups):
                     base = settings.decoder_learning_rate if index == 0 else settings.posterior_learning_rate
                     group["lr"] = base * multiplier
@@ -366,15 +506,18 @@ def train(settings: ChemTrainSettings) -> dict:
                     raise FloatingPointError(f"non-finite chemistry loss at step {step}")
                 if step % settings.log_every == 0 or step == 1:
                     elapsed = time.perf_counter() - started
+                    completed_updates = step - start_step
                     telemetry.write(
                         "train",
                         step=step,
+                        start_step=start_step,
+                        updates_completed=completed_updates,
                         epoch=epoch,
                         loss=float(objective.loss.detach()),
                         grad_norm=float(grad_norm),
                         learning_rates=[group["lr"] for group in optimizer.param_groups],
-                        steps_per_second=step / max(elapsed, 1e-9),
-                        examples_per_second=step * settings.batch_size / max(elapsed, 1e-9),
+                        steps_per_second=completed_updates / max(elapsed, 1e-9),
+                        examples_per_second=completed_updates * settings.batch_size / max(elapsed, 1e-9),
                         metrics={name: float(value) for name, value in objective.metrics.items()},
                         gpu=gpu_snapshot(device),
                     )
@@ -427,11 +570,9 @@ def train(settings: ChemTrainSettings) -> dict:
             **final_metrics,
         )
 
-    expected_checkpoint_steps = list(
-        range(settings.checkpoint_every, settings.max_steps + 1, settings.checkpoint_every)
+    expected_checkpoint_steps = _scheduled_steps_after(
+        start_step, settings.max_steps, settings.checkpoint_every
     )
-    if not expected_checkpoint_steps or expected_checkpoint_steps[-1] != settings.max_steps:
-        expected_checkpoint_steps.append(settings.max_steps)
     checkpoint_paths = sorted(checkpoints.glob("step_*.pt"))
     actual_checkpoint_steps = [int(path.stem.split("_")[-1]) for path in checkpoint_paths]
     if actual_checkpoint_steps != expected_checkpoint_steps:
@@ -440,10 +581,8 @@ def train(settings: ChemTrainSettings) -> dict:
         )
     evaluation_paths = sorted(evaluations.glob("*.jsonl"))
     expected_step_evaluations = len(
-        list(range(settings.eval_every, settings.max_steps + 1, settings.eval_every))
+        _scheduled_steps_after(start_step, settings.max_steps, settings.eval_every)
     )
-    if settings.max_steps % settings.eval_every:
-        expected_step_evaluations += 1
     expected_evaluation_count = expected_step_evaluations + 1  # final_samples.jsonl
     if len(evaluation_paths) != expected_evaluation_count:
         raise RuntimeError(
@@ -453,7 +592,9 @@ def train(settings: ChemTrainSettings) -> dict:
         "schema": "ip/guacamol-completion-v1",
         "completed": True,
         "arm": settings.arm,
+        "start_step": start_step,
         "step": step,
+        "updates_completed": step - start_step,
         "metrics": final_metrics,
         "artifact_contract": {
             "expected_checkpoint_steps": expected_checkpoint_steps,
@@ -462,6 +603,7 @@ def train(settings: ChemTrainSettings) -> dict:
             "actual_evaluation_count": len(evaluation_paths),
         },
         "artifacts": {
+            "parent_checkpoint": parent_reference,
             "manifest": _artifact_reference(output / "manifest.json"),
             "telemetry": _artifact_reference(telemetry_path),
             "checkpoints": [_artifact_reference(path) for path in checkpoint_paths],
@@ -497,6 +639,11 @@ def main() -> None:
     parser.add_argument("--eval-samples", type=int, default=256)
     parser.add_argument("--final-eval-samples", type=int, default=1_000)
     parser.add_argument("--resume")
+    parser.add_argument("--shrink-lambda", type=float, default=1.0)
+    parser.add_argument("--perturb-sigma", type=float, default=0.0)
+    parser.add_argument("--reset-optimizer-on-resume", action="store_true")
+    parser.add_argument("--restart-schedule-on-resume", action="store_true")
+    parser.add_argument("--resume-decoder-from-ema", action="store_true")
     for prefix, spec in (("decoder", CHEM_DECODER_SPEC), ("posterior", CHEM_POSTERIOR_SPEC)):
         parser.add_argument(f"--{prefix}-width", type=int, default=spec.width)
         parser.add_argument(f"--{prefix}-layers", type=int, default=spec.layers)
@@ -519,6 +666,11 @@ def main() -> None:
         decoder_spec=_spec("decoder", args),
         posterior_spec=_spec("posterior", args),
         resume=args.resume,
+        shrink_lambda=args.shrink_lambda,
+        perturb_sigma=args.perturb_sigma,
+        reset_optimizer_on_resume=args.reset_optimizer_on_resume,
+        restart_schedule_on_resume=args.restart_schedule_on_resume,
+        resume_decoder_from_ema=args.resume_decoder_from_ema,
     )
     print(json.dumps(train(settings), indent=2, sort_keys=True))
 

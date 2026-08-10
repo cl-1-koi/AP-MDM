@@ -16,6 +16,11 @@ from repro.ip_chem_model import (
     learned_ip_objective,
     random_ip_objective,
 )
+from repro.ip_chem_train import (
+    ChemTrainSettings,
+    _scheduled_steps_after,
+    _shrink_and_perturb,
+)
 
 
 def _tokenizer() -> SmilesTokenizer:
@@ -100,3 +105,40 @@ def test_search_free_sampler_never_emits_special_tokens():
         assert tokenizer.pad_id not in sequence
         assert tokenizer.bos_id not in sequence
         assert tokenizer.eos_id not in sequence
+
+
+def test_resume_schedule_excludes_parent_and_includes_terminal_step():
+    assert _scheduled_steps_after(20_000, 100_000, 20_000) == [
+        40_000, 60_000, 80_000, 100_000
+    ]
+    assert _scheduled_steps_after(20_500, 23_001, 1_000) == [21_000, 22_000, 23_000, 23_001]
+
+
+def test_shrink_and_perturb_is_seeded_and_changes_all_trainable_parameters():
+    first = torch.nn.Sequential(torch.nn.Linear(4, 3), torch.nn.LayerNorm(3))
+    second = torch.nn.Sequential(torch.nn.Linear(4, 3), torch.nn.LayerNorm(3))
+    second.load_state_dict(first.state_dict())
+    report_first = _shrink_and_perturb(
+        [first], shrink_lambda=0.95, perturb_sigma=0.005, seed=17
+    )
+    report_second = _shrink_and_perturb(
+        [second], shrink_lambda=0.95, perturb_sigma=0.005, seed=17
+    )
+    assert report_first == report_second
+    assert report_first["parameters"] == sum(p.numel() for p in first.parameters())
+    for left, right in zip(first.parameters(), second.parameters(), strict=True):
+        assert torch.equal(left, right)
+
+
+def test_restart_controls_require_parent_checkpoint():
+    try:
+        ChemTrainSettings(
+            arm="random",
+            data_dir="data",
+            output_dir="output",
+            shrink_lambda=0.95,
+        )
+    except ValueError as error:
+        assert "require --resume" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("restart without parent should fail")
