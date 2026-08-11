@@ -11,6 +11,7 @@ from repro.sudoku_order_exposure import (
     choose_cell,
     legal_candidate_counts,
     partial_consistent,
+    partial_continuable,
     rollout_horizons,
 )
 
@@ -57,6 +58,10 @@ def test_partial_consistency_distinguishes_duplicates():
     bad[0, 1] = 1
     assert partial_consistent(good)
     assert not partial_consistent(bad)
+    invalid_full = np.asarray(
+        [[1, 1, 3, 4], [3, 4, 1, 2], [2, 3, 4, 1], [4, 2, 2, 3]]
+    )
+    assert not partial_continuable(invalid_full)
 
 
 def test_perfect_keyed_policy_survives_every_horizon_for_all_orders():

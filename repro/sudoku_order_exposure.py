@@ -20,7 +20,6 @@ from repro.small_grokking import (
     BOX_COLS,
     BOX_ROWS,
     CELLS,
-    HINT_MIN,
     SIZE,
     S4Policy,
     S4Split,
@@ -121,6 +120,11 @@ def partial_consistent(grid: np.ndarray) -> bool:
     return True
 
 
+def partial_continuable(grid: np.ndarray) -> bool:
+    """Whether a consistent partial board has at least one exact completion."""
+    return partial_consistent(grid) and count_solutions(grid, limit=1) > 0
+
+
 def _snapshot(
     grids: torch.Tensor,
     split: S4Split,
@@ -130,7 +134,10 @@ def _snapshot(
 ) -> dict[str, Any]:
     array = grids.detach().cpu().numpy().astype(np.uint8)
     consistent = np.asarray([partial_consistent(grid) for grid in array])
-    continuable = np.asarray([count_solutions(grid, limit=1) > 0 for grid in array])
+    # ``count_solutions`` accepts only a consistent starting puzzle; it treats
+    # any filled board as a leaf.  Guard that precondition explicitly because
+    # policy rollouts can create inconsistent full boards.
+    continuable = np.asarray([partial_continuable(grid) for grid in array])
     complete = (array != 0).all(axis=(1, 2))
     exact = complete & (array == split.solutions).all(axis=(1, 2))
     valid = complete & np.asarray([is_valid(grid) for grid in array])
