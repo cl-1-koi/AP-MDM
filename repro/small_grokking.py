@@ -35,8 +35,8 @@ from repro.telemetry import TelemetryWriter, gpu_snapshot
 from repro.trainer import constant_schedule_with_warmup, seed_everything
 
 
-Arm = Literal["fo_arm", "ao_arm", "lo_arm", "mdm"]
-ARMS = frozenset(("fo_arm", "ao_arm", "lo_arm", "mdm"))
+Arm = Literal["fo_arm", "ao_arm", "oracle_arm", "lo_arm", "mdm"]
+ARMS = frozenset(("fo_arm", "ao_arm", "oracle_arm", "lo_arm", "mdm"))
 TargetMode = Literal["sudoku_solution", "random_payload"]
 TARGET_MODES = frozenset(("sudoku_solution", "random_payload"))
 SIZE = 4
@@ -383,9 +383,11 @@ def _hint_order(batch: int, device: torch.device, generator: torch.Generator) ->
 
 
 def _prefix(order: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-    ranks = torch.arange(CELLS, device=order.device)[None]
+    ranks = torch.arange(order.shape[1], device=order.device)[None]
     take = ranks < lengths[:, None]
-    mask = torch.zeros_like(order, dtype=torch.bool)
+    mask = torch.zeros(
+        (len(order), CELLS), dtype=torch.bool, device=order.device
+    )
     mask.scatter_(1, order, take)
     return mask
 
@@ -402,6 +404,62 @@ def _candidate_orders(
     return scores.masked_fill(~candidate, -torch.inf).argsort(-1, descending=True)
 
 
+def legal_candidate_counts(grids: torch.Tensor) -> torch.Tensor:
+    """Return legal Sudoku digit counts for every cell in partial S4 boards."""
+    if grids.ndim != 3 or grids.shape[1:] != (SIZE, SIZE):
+        raise ValueError("expected grids with shape (B,4,4)")
+    counts = torch.zeros((len(grids), CELLS), dtype=torch.long, device=grids.device)
+    for cell in range(CELLS):
+        row, col = divmod(cell, SIZE)
+        r0 = row - row % BOX_ROWS
+        c0 = col - col % BOX_COLS
+        used = torch.cat(
+            (
+                grids[:, row, :],
+                grids[:, :, col],
+                grids[:, r0 : r0 + BOX_ROWS, c0 : c0 + BOX_COLS].reshape(
+                    len(grids), -1
+                ),
+            ),
+            dim=1,
+        )
+        legal = torch.zeros(len(grids), dtype=torch.long, device=grids.device)
+        for digit in range(1, SIZE + 1):
+            legal += ~(used == digit).any(-1)
+        counts[:, cell] = legal
+    return counts
+
+
+def oracle_mrv_cell(grids: torch.Tensor, empty: torch.Tensor) -> torch.Tensor:
+    """Select the fewest-candidate empty cell with a row-major tie-break."""
+    if empty.shape != (len(grids), CELLS):
+        raise ValueError("empty mask must have shape (B,16)")
+    counts = legal_candidate_counts(grids)
+    indices = torch.arange(CELLS, device=grids.device)[None]
+    scores = -(counts * (CELLS + 1) + indices).float()
+    return scores.masked_fill(~empty, -torch.inf).argmax(-1)
+
+
+def oracle_mrv_orders(puzzles: torch.Tensor, solutions: torch.Tensor) -> torch.Tensor:
+    """Build target-blind MRV cell orders, using targets only to advance state."""
+    if puzzles.shape != solutions.shape or puzzles.shape[1:] != (SIZE, SIZE):
+        raise ValueError("expected matching (B,4,4) puzzles and solutions")
+    grids = puzzles.clone()
+    targets = solutions.reshape(-1, CELLS)
+    candidate = grids.reshape(-1, CELLS) == EMPTY
+    maximum = int(candidate.sum(-1).max())
+    orders = torch.zeros(
+        (len(puzzles), maximum), dtype=torch.long, device=puzzles.device
+    )
+    batch = torch.arange(len(puzzles), device=puzzles.device)
+    for step in range(maximum):
+        empty = grids.reshape(-1, CELLS) == EMPTY
+        cell = oracle_mrv_cell(grids, empty)
+        orders[:, step] = cell
+        grids.reshape(-1, CELLS)[batch, cell] = targets[batch, cell]
+    return orders
+
+
 def _sample_lengths(candidate: torch.Tensor, generator: torch.Generator) -> torch.Tensor:
     lengths = candidate.sum(-1)
     random_values = torch.rand(lengths.shape, device=candidate.device, generator=generator)
@@ -416,7 +474,11 @@ def fo_ao_loss(
     generator: torch.Generator,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     candidate = puzzles.reshape(-1, CELLS) == 0
-    orders = _candidate_orders(candidate, arm, generator)
+    orders = (
+        oracle_mrv_orders(puzzles, solutions)
+        if arm == "oracle_arm"
+        else _candidate_orders(candidate, arm, generator)
+    )
     prefix_lengths = _sample_lengths(candidate, generator)
     prefix = _prefix(orders, prefix_lengths) & candidate
     grids = puzzles.reshape(-1, CELLS).clone()
@@ -776,6 +838,8 @@ def evaluate_split(
         elif arm == "ao_arm":
             scores = torch.rand(empty.shape, device=device, generator=generator)
             cell = scores.masked_fill(~empty, -torch.inf).argmax(-1)
+        elif arm == "oracle_arm":
+            cell = oracle_mrv_cell(grids, empty)
         elif arm == "lo_arm":
             cell = output["cell_logits"].masked_fill(~empty, -torch.inf).argmax(-1)
         else:
@@ -910,6 +974,7 @@ def run(settings: Settings) -> dict[str, Any]:
             "fixed_canvas": True,
             "variable_length": False,
             "learned_order": settings.arm == "lo_arm",
+            "oracle_mrv_order": settings.arm == "oracle_arm",
             "masked_diffusion": settings.arm == "mdm",
         },
         "data": {

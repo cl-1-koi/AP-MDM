@@ -22,6 +22,7 @@ from repro.small_grokking import (
     fo_ao_loss,
     frozen_splits,
     lo_loss,
+    oracle_mrv_orders,
     mdm_loss,
     model_spec,
     posterior_spec,
@@ -80,7 +81,7 @@ def test_solution_target_mode_is_identity():
     assert contract["mode"] == "sudoku_solution"
 
 
-@pytest.mark.parametrize("arm", ["fo_arm", "ao_arm"])
+@pytest.mark.parametrize("arm", ["fo_arm", "ao_arm", "oracle_arm"])
 def test_fixed_canvas_loss_is_finite_and_backpropagates(arm):
     train, _, _ = frozen_splits(42)
     puzzles = torch.as_tensor(train.puzzles[:4]).long()
@@ -93,6 +94,18 @@ def test_fixed_canvas_loss_is_finite_and_backpropagates(arm):
     assert all(torch.isfinite(value) for value in metrics.values())
     loss.backward()
     assert policy.digit_head.weight.grad is not None
+
+
+def test_oracle_mrv_orders_cover_every_blank_without_target_lookahead():
+    train, _, _ = frozen_splits(42)
+    puzzles = torch.as_tensor(train.puzzles[:4]).long()
+    solutions = torch.as_tensor(train.solutions[:4]).long()
+    orders = oracle_mrv_orders(puzzles, solutions)
+    assert orders.shape == (4, 10)
+    blank = puzzles.reshape(4, CELLS) == 0
+    selected = torch.zeros_like(blank)
+    selected.scatter_(1, orders, True)
+    assert torch.equal(selected, blank)
 
 
 def test_learning_order_loss_reaches_policy_and_posterior():

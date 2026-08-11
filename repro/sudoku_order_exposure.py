@@ -27,7 +27,9 @@ from repro.small_grokking import (
     encode_state,
     frozen_splits,
     is_valid,
+    legal_candidate_counts,
     model_spec,
+    oracle_mrv_cell,
 )
 
 
@@ -52,32 +54,6 @@ def _write_json(path: Path, value: Any) -> None:
     os.replace(temporary, path)
 
 
-def legal_candidate_counts(grids: torch.Tensor) -> torch.Tensor:
-    """Return legal digit counts for every cell in a batch of partial S4 boards."""
-    if grids.ndim != 3 or grids.shape[1:] != (SIZE, SIZE):
-        raise ValueError("expected grids with shape (B,4,4)")
-    counts = torch.zeros((len(grids), CELLS), dtype=torch.long, device=grids.device)
-    for cell in range(CELLS):
-        row, col = divmod(cell, SIZE)
-        r0 = row - row % BOX_ROWS
-        c0 = col - col % BOX_COLS
-        used = torch.cat(
-            (
-                grids[:, row, :],
-                grids[:, :, col],
-                grids[:, r0 : r0 + BOX_ROWS, c0 : c0 + BOX_COLS].reshape(
-                    len(grids), -1
-                ),
-            ),
-            dim=1,
-        )
-        legal = torch.zeros(len(grids), dtype=torch.long, device=grids.device)
-        for digit in range(1, SIZE + 1):
-            legal += ~(used == digit).any(-1)
-        counts[:, cell] = legal
-    return counts
-
-
 def choose_cell(
     grids: torch.Tensor,
     empty: torch.Tensor,
@@ -92,11 +68,7 @@ def choose_cell(
     elif order == "learned":
         scores = output["cell_logits"].float()
     elif order == "oracle_mrv":
-        # Fewer candidates wins; subtracting the cell index makes the tie-break
-        # row-major.  No target/solution information enters this calculation.
-        counts = legal_candidate_counts(grids)
-        indices = torch.arange(CELLS, device=grids.device)[None]
-        scores = -(counts * (CELLS + 1) + indices).float()
+        return oracle_mrv_cell(grids, empty)
     else:
         raise ValueError(f"unknown order {order}")
     return scores.expand_as(empty).masked_fill(~empty, -torch.inf).argmax(-1)
