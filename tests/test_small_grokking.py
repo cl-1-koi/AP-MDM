@@ -106,6 +106,23 @@ def test_oracle_mrv_orders_cover_every_blank_without_target_lookahead():
     selected = torch.zeros_like(blank)
     selected.scatter_(1, orders, True)
     assert torch.equal(selected, blank)
+    policy = S4Policy(model_spec(width=32, blocks=1, heads=4))
+    direct, _ = fo_ao_loss(
+        policy,
+        puzzles,
+        solutions,
+        "oracle_arm",
+        torch.Generator().manual_seed(13),
+    )
+    cached, _ = fo_ao_loss(
+        policy,
+        puzzles,
+        solutions,
+        "oracle_arm",
+        torch.Generator().manual_seed(13),
+        oracle_orders=orders,
+    )
+    assert torch.equal(direct, cached)
 
 
 def test_learning_order_loss_reaches_policy_and_posterior():

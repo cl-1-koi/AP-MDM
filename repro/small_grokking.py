@@ -472,13 +472,21 @@ def fo_ao_loss(
     solutions: torch.Tensor,
     arm: Arm,
     generator: torch.Generator,
+    oracle_orders: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     candidate = puzzles.reshape(-1, CELLS) == 0
-    orders = (
-        oracle_mrv_orders(puzzles, solutions)
-        if arm == "oracle_arm"
-        else _candidate_orders(candidate, arm, generator)
-    )
+    if arm == "oracle_arm":
+        orders = (
+            oracle_mrv_orders(puzzles, solutions)
+            if oracle_orders is None
+            else oracle_orders
+        )
+        if orders.shape != (len(puzzles), int(candidate.sum(-1).max())):
+            raise ValueError("oracle orders do not match the minibatch")
+    else:
+        if oracle_orders is not None:
+            raise ValueError("precomputed oracle orders require oracle_arm")
+        orders = _candidate_orders(candidate, arm, generator)
     prefix_lengths = _sample_lengths(candidate, generator)
     prefix = _prefix(orders, prefix_lengths) & candidate
     grids = puzzles.reshape(-1, CELLS).clone()
@@ -1019,6 +1027,11 @@ def run(settings: Settings) -> dict[str, Any]:
     telemetry = TelemetryWriter(output / "telemetry.jsonl", run_id=output.name)
     train_puzzles = torch.as_tensor(np.array(train.puzzles, copy=True), dtype=torch.long, device=device)
     train_solutions = torch.as_tensor(np.array(train.solutions, copy=True), dtype=torch.long, device=device)
+    train_oracle_orders = (
+        oracle_mrv_orders(train_puzzles, train_solutions)
+        if settings.arm == "oracle_arm"
+        else None
+    )
     autocast_enabled = device.type == "cuda" and settings.bf16
     started = window_started = time.time()
     window_examples = 0
@@ -1045,7 +1058,18 @@ def run(settings: Settings) -> dict[str, Any]:
                         policy, puzzles, solutions, generator
                     )
                 else:
-                    loss, metrics = fo_ao_loss(policy, puzzles, solutions, settings.arm, generator)
+                    loss, metrics = fo_ao_loss(
+                        policy,
+                        puzzles,
+                        solutions,
+                        settings.arm,
+                        generator,
+                        oracle_orders=(
+                            train_oracle_orders[indices]
+                            if train_oracle_orders is not None
+                            else None
+                        ),
+                    )
             if not bool(torch.isfinite(loss)):
                 raise RuntimeError("non-finite loss")
             loss.backward()
